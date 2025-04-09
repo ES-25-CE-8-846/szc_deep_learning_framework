@@ -4,7 +4,7 @@ from torch import nn
 import torch.nn.functional as F
 
 
-class Model(nn.Module):
+class ImpulseEstimatorModel(nn.Module):
     def __init__(self, in_seq_len, input_channels, n_impulse, out_impulse_len) -> None:
         super().__init__()
         self.d1_conv_block1 = self.grouped_1d_conv_block(input_channels, 32, 32)
