@@ -7,13 +7,12 @@ import torch.nn.functional as F
 
 
 class ImpulseEstimatorModel(nn.Module):
-    def __init__(self, in_seq_len, input_channels, n_impulse, out_impulse_len, output_shape:Tuple[int,int]) -> None:
+    def __init__(self, input_channels, n_down_convs = 6) -> None:
         super().__init__()
 
         self.d1_conv_block1 = self.grouped_1d_conv_block(input_channels, 16, 32)
         self.d1_conv_block2 = self.grouped_1d_conv_block(16, 16, 32)
-
-        n_down_convs = 5    
+    
         input_channels = 16 
         self.down_conv_list = nn.ModuleList()
         
@@ -40,7 +39,7 @@ class ImpulseEstimatorModel(nn.Module):
         # thus (C, H, W) = (2, seq_lenght, 3) for the phone
 
     def grouped_conv_block(self, in_channels, mid_channels, out_channels, kernelsize):
-        """Apply grouped convolution and 1x1 convolution"""
+        """apply grouped convolution and 1x1 convolution"""
         return nn.Sequential(
             nn.Conv2d(
                 in_channels=in_channels,
@@ -73,13 +72,12 @@ class ImpulseEstimatorModel(nn.Module):
         )
 
     def up_conv_block(self, in_channels, out_channels):
+        """apply transposed convolution to upsample"""
         return nn.Sequential(
             nn.ConvTranspose2d(in_channels, out_channels, kernel_size=(8, 3), stride=(3,1)),
             # nn.Conv2d(out_channels, out_channels, kernel_size=3),
             nn.ReLU()
                 )
-
-
 
     def forward(self, x):
         x = self.d1_conv_block1(x)
@@ -92,7 +90,4 @@ class ImpulseEstimatorModel(nn.Module):
             x = up_conv(x)
         print(x.size())
         x = self.final_up_convs(x)
-        
-        
-
         return x
