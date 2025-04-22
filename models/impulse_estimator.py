@@ -1,31 +1,45 @@
 from typing import Tuple
 import torch
-from torch.nn.modules import Linear, ReLU
+from torch.nn.modules import Conv2d, Linear, ReLU
 import torchaudio
 from torch import nn, prod, reshape, return_types
 import torch.nn.functional as F
 
 
 class ImpulseEstimatorModel(nn.Module):
-    def __init__(self, in_seq_len, input_channels, n_impulse, out_impulse_len, output_shape:Tuple[int,int]) -> None:
+    def __init__(self, input_channels, n_down_convs = 6) -> None:
         super().__init__()
-        self.d1_conv_block1 = self.grouped_1d_conv_block(input_channels, 32, 32)
-        self.d1_conv_block2 = self.grouped_1d_conv_block(32, 64, 32)
-        self.conv_block1 = self.grouped_conv_block(64, 64, 64, 3)
-        self.conv_block2 = self.grouped_conv_block(64, 64, 128, 3)
-        self.conv_block3 = self.grouped_conv_block(128, 128, 128, 3)
-        self.conv_block4 = self.grouped_conv_block(128, 128, 128, 3)
 
-        self.output_shape = output_shape 
-        out_feat = output_shape[0] * output_shape[1]
-        self.fl = self.final_linear(out_feat)
-
+        self.d1_conv_block1 = self.grouped_1d_conv_block(input_channels, 16, 32)
+        self.d1_conv_block2 = self.grouped_1d_conv_block(16, 16, 32)
+    
+        input_channels = 16 #we change the wariable here to be the output dim of the previus convolution  
+        self.down_conv_list = nn.ModuleList()
+        
+        for _ in range(n_down_convs):
+            output_channels = input_channels*2
+            self.down_conv_list.append(self.grouped_conv_block(input_channels,output_channels ,output_channels,3))
+            input_channels = output_channels
+        print(f"actual max channels {input_channels}")    
+        n_up_convs = n_down_convs 
+        self.up_convs_list = nn.ModuleList()
+    
+        for _ in range(n_up_convs):
+            output_channels = int(input_channels // 2)
+            self.up_convs_list.append(self.up_conv_block(input_channels, output_channels))
+            input_channels = output_channels
+        
+        self.final_up_convs = nn.Sequential(
+            nn.ConvTranspose2d(output_channels, 32, kernel_size=(64,9)),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 1, kernel_size=(64, 7))
+        )
 
         # input shape should be [[seq_length, n_speakers], [seq_length, n_mics]] ->
         # thus (C, H, W) = (2, seq_lenght, 3) for the phone
 
     def grouped_conv_block(self, in_channels, mid_channels, out_channels, kernelsize):
-        """Apply grouped convolution and 1x1 convolution"""
+        """apply grouped convolution and 1x1 convolution"""
         return nn.Sequential(
             nn.Conv2d(
                 in_channels=in_channels,
@@ -57,26 +71,23 @@ class ImpulseEstimatorModel(nn.Module):
             nn.ReLU(),
         )
 
-    def final_linear(self, output_features):
+    def up_conv_block(self, in_channels, out_channels):
+        """apply transposed convolution to upsample"""
         return nn.Sequential(
-            nn.LazyLinear(out_features=512),
-            nn.ReLU(),
-            nn.Linear(512, output_features)
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=(8, 3), stride=(3,1)),
+            # nn.Conv2d(out_channels, out_channels, kernel_size=3),
+            nn.ReLU()
                 )
 
     def forward(self, x):
         x = self.d1_conv_block1(x)
-        print(x.size())
         x = self.d1_conv_block2(x)
-
         print(x.size())
-
-        x = self.conv_block1(x)
-        x = self.conv_block2(x)
-        x = self.conv_block3(x)
-        x = self.conv_block4(x)
-        x = torch.ravel(x)
-        x = self.fl(x)
-        x = torch.reshape(x, self.output_shape)
-
+        for down_conv in self.down_conv_list:
+            x = down_conv(x)
+        print(x.size())
+        for up_conv in self.up_convs_list:
+            x = up_conv(x)
+        print(x.size())
+        x = self.final_up_convs(x)
         return x
