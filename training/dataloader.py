@@ -1,3 +1,4 @@
+from typing_extensions import override
 import torch
 import torchaudio
 import os
@@ -7,6 +8,7 @@ import soundfile
 from tqdm import tqdm
 import numpy as np 
 from torch.utils.data import Dataset
+import shutil
 
 class DefaultDataset(Dataset):
     def __init__(self, 
@@ -16,7 +18,10 @@ class DefaultDataset(Dataset):
                  sound_snip_len = 200, 
                  sound_snip_save_path = '/tmp/sound_snips',
                  limit_used_soundclips = 1000,
-                 rir_fixed_length = 4096):
+                 rir_fixed_length = 4096,
+                 override_existing = False,
+                 filter_by_std = None,
+                 filter_by_mean = None):
         
         self.sound_dataroot = sound_dataset_root
         self.rir_dataroot = rir_dataset_root
@@ -27,9 +32,14 @@ class DefaultDataset(Dataset):
         self.bz_rirs_shape = None
         self.dz_rirs_shape = None
         self.rir_fixed_length = rir_fixed_length
-
-        ### sort sound dataset 
         
+        self.filter_by_std = filter_by_std 
+        self.filter_by_mean = filter_by_mean
+
+        if override_existing:
+            shutil.rmtree(sound_snip_save_path)
+        
+
         if not os.path.exists(sound_snip_save_path):
             os.makedirs(sound_snip_save_path)
 
@@ -44,6 +54,7 @@ class DefaultDataset(Dataset):
                     else:
                         warnings.warn(f"file type .{file_extension} is not yet supported", UserWarning)
             snip_counter = 0
+            removed_snip_counter = 0
             for sound_file in tqdm(sorted(sound_flac_files)):
                 data, sr = soundfile.read(sound_file)
                 
@@ -51,11 +62,16 @@ class DefaultDataset(Dataset):
                 n_snips = len(data) // slen
                 for snip in range(n_snips):
                     data_snip = data[snip*slen : (snip + 1) * slen]
-                    fn = f'{snip_counter}'.rjust(10,'0') + '.wav'
-                    soundfile.write(file=os.path.join(sound_snip_save_path, fn), data=data_snip, samplerate=sr)
-                    snip_counter += 1 
+                    data_sound_tensor = torch.tensor(data_snip)
 
-            print(snip_counter)
+                    if self.filter_snippets(filter_by_std=filter_by_std, filter_by_mean=filter_by_mean, sound_tensor=data_sound_tensor):
+                        fn = f'{snip_counter}'.rjust(10,'0') + '.wav'
+                        soundfile.write(file=os.path.join(sound_snip_save_path, fn), data=data_snip, samplerate=sr)
+                        snip_counter += 1 
+                    else:
+                        removed_snip_counter += 1
+
+            print(snip_counter, removed_snip_counter)
             self.n_sound_snips = snip_counter
         else:
             warnings.warn('No new files added, remove the existing dataset or change the sound_snip_save_path', UserWarning)
@@ -73,7 +89,29 @@ class DefaultDataset(Dataset):
         self.n_rirs = len(self.rir_files)  
 
         if limit_used_soundclips:
-            self.n_sound_snips = limit_used_soundclips
+            if limit_used_soundclips < self.n_sound_snips:
+                self.n_sound_snips = limit_used_soundclips
+
+    def filter_snippets(self, filter_by_std, filter_by_mean, sound_tensor):
+        std = torch.std(sound_tensor)
+        mean = torch.mean(torch.abs(sound_tensor))
+
+        # print(f"mean {mean.item()}, std {std.item()}" ) 
+        
+        
+        is_good = False
+
+        if filter_by_std is not None and filter_by_mean is not None:
+            is_good = std > filter_by_std and mean > filter_by_mean
+        elif filter_by_std is not None:
+            is_good = std > filter_by_std 
+        elif filter_by_mean is not None: 
+            is_good = mean > filter_by_mean 
+        else:
+            is_good = True 
+
+        return is_good 
+
 
     def __len__(self):
         return self.n_rirs * self.n_sound_snips 
@@ -88,7 +126,6 @@ class DefaultDataset(Dataset):
         
         sound_fp = os.path.join(self.sound_snip_save_path, f'{sound_index}'.rjust(10,'0') + '.wav')
         sound, sr= torchaudio.load(sound_fp)
-
         # get impulse responses
         rirs = np.load(self.rir_files[rir_index])
         
@@ -119,8 +156,8 @@ class DefaultDataset(Dataset):
                 dz_rirs_ext = np.zeros(self.dz_rirs_shape)
                 dz_rirs_ext[:,:,:dz_rirs.shape[2]] = dz_rirs
             
-            data_dict = {'sound':sound, 'bz_rirs':bz_rirs_ext, 'dz_rirs':dz_rirs_ext}
+            data_dict = {'sound':sound, 'bz_rirs':bz_rirs_ext, 'dz_rirs':dz_rirs_ext, 'sr':sr}
         else:
-            data_dict = {'sound':sound, 'bz_rirs':bz_rirs, 'dz_rirs':dz_rirs}
+            data_dict = {'sound':sound, 'bz_rirs':bz_rirs, 'dz_rirs':dz_rirs, 'sr':sr}
 
         return data_dict
