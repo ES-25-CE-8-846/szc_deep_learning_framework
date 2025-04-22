@@ -136,7 +136,6 @@ class TestDataloading(unittest.TestCase):
                                                     sound_snip_len=sound_snips_len_ms,
                                                     override_existing=True,
                                                     filter_by_std=0.02,
-
                                                     filter_by_mean=0.02)
         
         test_sound_1 = torch.tensor(np.random.normal(loc=0, scale=2, size=100))

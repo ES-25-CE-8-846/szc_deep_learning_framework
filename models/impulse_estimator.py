@@ -13,7 +13,7 @@ class ImpulseEstimatorModel(nn.Module):
         self.d1_conv_block1 = self.grouped_1d_conv_block(input_channels, 16, 32)
         self.d1_conv_block2 = self.grouped_1d_conv_block(16, 16, 32)
     
-        input_channels = 16 
+        input_channels = 16 #we change the wariable here to be the output dim of the previus convolution  
         self.down_conv_list = nn.ModuleList()
         
         for _ in range(n_down_convs):

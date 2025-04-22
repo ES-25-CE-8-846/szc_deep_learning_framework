@@ -6,7 +6,7 @@ from torch import nn, prod, reshape, return_types
 import torch.nn.functional as F
 
 
-class ImpulseEstimatorModel(nn.Module):
+class FilterEstimatorModel(nn.Module):
     def __init__(self, input_channels, output_shape:Tuple[int,int]) -> None:
         super().__init__()
         self.d1_conv_block1 = self.grouped_1d_conv_block(input_channels, 32, 32)
