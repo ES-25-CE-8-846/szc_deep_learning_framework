@@ -8,8 +8,9 @@ from tqdm import tqdm
 import unittest 
 import shutil 
 from training import trainer 
+from training import loss_functions
 import numpy as np
-
+import models 
 import soundfile 
 
 
@@ -21,7 +22,7 @@ class TestDataloading(unittest.TestCase):
         self.test_dataloader = dataloader.DefaultDataset(sound_dataset_root='./testing_data/audio_raw/',
                                                     rir_dataset_root='./testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/test/',
                                                     sound_snip_len=sound_snips_len_ms,
-                                                    override_existing=True)
+override_existing=True)
 
         self.assertTrue(self.test_dataloader.__len__() > 0 )
         data_dict = self.test_dataloader[0]
@@ -108,7 +109,6 @@ class TestDataloading(unittest.TestCase):
         for i, data_dict in enumerate(torch_dataloader):
             fl = test_trainer.filter_length
 
-
             filters = torch.ones((16,3,fl))
             sound = data_dict['sound']
             
@@ -161,13 +161,40 @@ class TestDataloading(unittest.TestCase):
             print(f"std {(torch.std(sound).item())} mean {(torch.mean(abs(sound)).item())}")
             # soundfile.write(file = f"./std{int(torch.std(sound).item()*10000)}mean{int(torch.mean(sound).item()*10000)}.wav", data= sound.ravel(), samplerate=sr)
             
+class TestTrainer(unittest.TestCase):
+    def test_run_epoch(self):
+        device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+        sound_snips_len_ms = 1000 
+        self.test_dataloader = dataloader.DefaultDataset(sound_dataset_root='./testing_data/audio_raw/',
+                                                    rir_dataset_root='./testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/test/',
+                                                    sound_snip_len=sound_snips_len_ms,
+                                                    override_existing=True)
+        
+        torch_dataloader = torch.utils.data.DataLoader(dataset=self.test_dataloader, batch_size=16)
+        test_model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3, 2048))
+
+        test_trainer = trainer.Trainer(dataloader=torch_dataloader, loss_function=loss_functions.sound_loss, model=test_model, device = device, filter_length=2048) 
+        
+        test_trainer.run_epoch()
+        
+
+
              
 
+class TestLoss(unittest.TestCase):
+    def test_sound_loss(self):
 
+        gt_sound = torch.rand(16,1,100)
+        ms_bz_sound = torch.rand(16,3,200)
+        ms_dz_sound = torch.rand(16,12,200) * 0.1
+        f_sound = torch.rand(16,3,150) 
         
-        
+        data_for_loss_dict = {'gt_sound':gt_sound,
+                              'f_sound':f_sound,
+                              'bz_input':ms_bz_sound,
+                              'dz_input':ms_dz_sound}
 
-             
+        loss_functions.sound_loss(data_for_loss_dict)
 
 
 

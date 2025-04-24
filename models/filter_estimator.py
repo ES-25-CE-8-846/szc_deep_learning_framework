@@ -75,8 +75,9 @@ class FilterEstimatorModel(nn.Module):
         x = self.conv_block2(x)
         x = self.conv_block3(x)
         x = self.conv_block4(x)
-        x = torch.ravel(x)
+
+        x = torch.flatten(x, start_dim=1)  # Keep batch dim intact
         x = self.fl(x)
-        x = torch.reshape(x, self.output_shape)
+        x = x.view(-1, *self.output_shape)  # reshape per batch
 
         return x
