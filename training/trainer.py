@@ -162,21 +162,21 @@ class Trainer:
         filters = torch.ones((batch_size, n_speakers, self.filter_length))
 
         for iteration in range(n_iterations):
-            filterd_sound = self.apply_filter(sound, filters)
+            filtered_sound = self.apply_filter(sound, filters)
             bz_microphone_input = self.auralizer(sound, bz_rirs)
             
-            nn_input = self.format_to_model_input(filterd_sound, bz_microphone_input)
+            nn_input = self.format_to_model_input(filtered_sound, bz_microphone_input)
             
             filters = self.model.forward(nn_input)
 
             # print(f"output filter shape {filters.size()}")
             
-            filterd_sound = self.apply_filter(sound, filters)
-            bz_microphone_input = self.auralizer(filterd_sound, bz_rirs)
-            dz_microphone_input = self.auralizer(filterd_sound, dz_rirs)
+            filtered_sound = self.apply_filter(sound, filters)
+            bz_microphone_input = self.auralizer(filtered_sound, bz_rirs)
+            dz_microphone_input = self.auralizer(filtered_sound, dz_rirs)
             
             data_for_loss_dict = {'gt_sound':sound,
-                                  'f_sound':filterd_sound,
+                                  'f_sound':filtered_sound,
                                   'bz_input':bz_microphone_input,
                                   'dz_input':dz_microphone_input,
                                   'filters':filters,
