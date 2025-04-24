@@ -110,7 +110,7 @@ class Trainer:
 
         return output
     
-    def fromat_to_model_input(self, output_sound, mic_inputs):
+    def format_to_model_input(self, output_sound, mic_inputs):
         """
         Function to ensure correct network input 
         Args:
@@ -165,11 +165,11 @@ class Trainer:
             filterd_sound = self.apply_filter(sound, filters)
             bz_microphone_input = self.auralizer(sound, bz_rirs)
             
-            nn_input = self.fromat_to_model_input(filterd_sound, bz_microphone_input)
+            nn_input = self.format_to_model_input(filterd_sound, bz_microphone_input)
             
             filters = self.model.forward(nn_input)
 
-            print(f"output filter shape {filters.size()}")
+            # print(f"output filter shape {filters.size()}")
             
             filterd_sound = self.apply_filter(sound, filters)
             bz_microphone_input = self.auralizer(filterd_sound, bz_rirs)
@@ -184,9 +184,9 @@ class Trainer:
             
             loss_dict = self.loss_function(data_for_loss_dict, device=self.device)
             loss = loss_dict['loss']
-            print("filters requires grad:", filters.requires_grad)
-            print("filtered_sound grad_fn:", filterd_sound.requires_grad)
-            print("loss grad_fn:", loss.grad_fn)
+            # print("filters requires grad:", filters.requires_grad)
+            # print("filtered_sound grad_fn:", filterd_sound.requires_grad)
+            # print("loss grad_fn:", loss.grad_fn)
             loss.backward() 
             self.optimizer.step()
             self.optimizer.zero_grad()
