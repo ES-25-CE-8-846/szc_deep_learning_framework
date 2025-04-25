@@ -7,19 +7,19 @@ import torch.nn.functional as F
 
 
 class FilterEstimatorModel(nn.Module):
-    def __init__(self, input_channels, output_shape:Tuple[int,int]) -> None:
+    def __init__(self, input_channels, output_shape: Tuple[int, int]) -> None:
         super().__init__()
         self.d1_conv_block1 = self.grouped_1d_conv_block(input_channels, 32, 32)
         self.d1_conv_block2 = self.grouped_1d_conv_block(32, 64, 32)
+        self.d1_conv_block3 = self.grouped_1d_conv_block(64, 64, 32)
         self.conv_block1 = self.grouped_conv_block(64, 64, 64, 3)
         self.conv_block2 = self.grouped_conv_block(64, 64, 128, 3)
         self.conv_block3 = self.grouped_conv_block(128, 128, 128, 3)
         self.conv_block4 = self.grouped_conv_block(128, 128, 128, 3)
 
-        self.output_shape = output_shape 
+        self.output_shape = output_shape
         out_feat = output_shape[0] * output_shape[1]
         self.fl = self.final_linear(out_feat)
-
 
         # input shape should be [[seq_length, n_speakers], [seq_length, n_mics]] ->
         # thus (C, H, W) = (2, seq_lenght, 3) for the phone
@@ -52,22 +52,21 @@ class FilterEstimatorModel(nn.Module):
                 kernel_size=(kernelsize, 1),
                 groups=in_channels,
                 padding=0,
-                stride=(4,1),
+                stride=(4, 1),
             ),
             nn.ReLU(),
         )
 
     def final_linear(self, output_features):
         return nn.Sequential(
-            nn.LazyLinear(out_features=512),
-            nn.ReLU(),
-            nn.Linear(512, output_features)
-                )
+            nn.LazyLinear(out_features=512), nn.ReLU(), nn.Linear(512, output_features)
+        )
 
     def forward(self, x):
         x = self.d1_conv_block1(x)
         print(x.size())
         x = self.d1_conv_block2(x)
+        x = self.d1_conv_block3(x)
 
         print(x.size())
 

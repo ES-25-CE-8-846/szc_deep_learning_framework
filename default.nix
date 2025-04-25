@@ -25,6 +25,8 @@
         pybind11
         torch
         torchaudio
+        torchinfo
+        soundfile
       ];
       doCheck = false;
     };
