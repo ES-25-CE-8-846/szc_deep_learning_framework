@@ -228,6 +228,9 @@ class TestDataloading(unittest.TestCase):
 class TestTrainer(unittest.TestCase):
     def test_run_epoch(self):
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+        print(device)
+
         sound_snips_len_ms = 500
         self.test_dataloader = dataloader.DefaultDataset(
             sound_dataset_root="./testing_data/audio_raw/",
@@ -238,7 +241,7 @@ class TestTrainer(unittest.TestCase):
         )
 
         torch_dataloader = torch.utils.data.DataLoader(
-            dataset=self.test_dataloader, batch_size=32
+            dataset=self.test_dataloader, batch_size=4
         )
         test_model = models.filter_estimator.FilterEstimatorModel(
             input_channels=2, output_shape=(3, 1024)
@@ -251,7 +254,7 @@ class TestTrainer(unittest.TestCase):
             device=device,
             filter_length=1024,
             inner_loop_iterations=16,
-            enable_debug_plotting=False,
+            enable_debug_plotting=True,
         )
 
         test_trainer.run_epoch()

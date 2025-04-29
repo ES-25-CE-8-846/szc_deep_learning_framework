@@ -45,7 +45,7 @@ class FilterEstimatorModel(nn.Module):
                 kernel_size=1,
                 bias=False
             ),
-            nn.BatchNorm2d(out_channels),
+            # nn.BatchNorm2d(out_channels),
             nn.ReLU(),
         )
 
@@ -74,7 +74,7 @@ class FilterEstimatorModel(nn.Module):
 
     def final_linear(self, output_features):
         return nn.Sequential(
-            nn.LazyLinear(out_features=512), nn.ReLU(), nn.Linear(512, output_features)
+            nn.LazyLinear(out_features=512), nn.ReLU(), nn.Linear(512, output_features, bias=False)
         )
 
     def forward(self, x):

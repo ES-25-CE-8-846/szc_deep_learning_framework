@@ -27,6 +27,7 @@
         torchaudio
         torchinfo
         soundfile
+        wandb
       ];
       doCheck = false;
     };
