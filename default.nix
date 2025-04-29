@@ -28,12 +28,12 @@
     };
   pyflac = let
     pname = "pyflac";
-    version = "2.2.0";
+    version = "3.0.0";
   in
     pythonPackages.buildPythonPackage {
       inherit pname version;
-      src = pkgs.fetchPypi {
-        inherit pname version;
+      src = pkgs.fetchurl {
+        url = "https://files.pythonhosted.org/packages/2a/83/4f3e184618b1847d3b9905adc134ce016d32712151cc2c478d36f09727ef/pyFLAC-3.0.0.tar.gz";
         sha256 = "825d920e696f61493249afa2f7fd2fb42d7e7d2884a7b3e8b6ad1d76b5998119";
       };
       propagatedBuildInputs = with pythonPackages; [
