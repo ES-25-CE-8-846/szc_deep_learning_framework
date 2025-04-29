@@ -23,18 +23,30 @@
         numpy
         scipy
         pybind11
-        torch
-        torchaudio
-        torchinfo
+      ];
+      doCheck = false;
+    };
+  pyflac = let
+    pname = "pyflac";
+    version = "2.2.0";
+  in
+    pythonPackages.buildPythonPackage {
+      inherit pname version;
+      src = pkgs.fetchPypi {
+        inherit pname version;
+        sha256 = "825d920e696f61493249afa2f7fd2fb42d7e7d2884a7b3e8b6ad1d76b5998119";
+      };
+      propagatedBuildInputs = with pythonPackages; [
+        cffi
+        numpy
         soundfile
-        wandb
       ];
       doCheck = false;
     };
 in
   pkgs.mkShell {
     buildInputs = with pythonPackages;
-      [pyroomacoustics]
+      [pyroomacoustics pyflac]
       ++ (with pkgs; [
         python311
       ])
@@ -46,5 +58,10 @@ in
         ipykernel
         jupyterlab
         sounddevice
+        torch
+        torchaudio
+        torchinfo
+        soundfile
+        wandb
       ]);
   }

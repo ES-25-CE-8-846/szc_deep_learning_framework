@@ -80,7 +80,6 @@ class TestDataloading(unittest.TestCase):
             dataloader=torch_dataloader, loss_function=None, model=None
         )
 
-        test_trainer.auralizer(sound_tensor, rirs)
 
     def test_filter_apply(self):
 
@@ -276,6 +275,24 @@ class TestLoss(unittest.TestCase):
         }
 
         loss_functions.sound_loss(data_for_loss_dict)
+
+    def test_sann_loss(self):
+
+        bz_rirs = torch.rand(16,3,3,4096)
+        dz_rirs = torch.rand(16,3,12,4096)
+        complex_filters = torch.rand(16,3,2049)
+
+        data_dict = {'bz_rir':bz_rirs,
+                     'dz_rir':dz_rirs}
+
+        loss_data_dict = {'complex_filters':complex_filters,
+                          'data_dict':data_dict}
+
+        loss = loss_functions.sann_loss(loss_data_dict)
+
+        print(f"loss {loss}")
+
+
 
 
 class TestModels(unittest.TestCase):

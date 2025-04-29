@@ -1,3 +1,4 @@
+from operator import matmul
 import torch
 
 
@@ -68,6 +69,53 @@ def sound_loss(loss_data_dict, weights=None, device=None):
     }
 
     return loss_dict
+
+
+def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
+    """
+    Loss function based on SANN-PSZ
+    """
+    # Apply RFFT to bz_rirs: (B, S, M, T) -> (B, S, M, F)
+    bz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['bz_rir'])  # shape: (B, S, M, F)
+    dz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['dz_rir'])  # shape: (B, S, M, F)
+
+    # Permute to (B, M, S, F) to match with complex_filters: (B, S, F)
+    bz_rirs_fft = bz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)
+    dz_rirs_fft = dz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)
+
+    # Unsqueeze filter dims to (B, S, 1, F)
+    complex_filters = loss_data_dict['complex_filters'].unsqueeze(2)  # (B, S, 1, F)
+
+    # Multiply and sum over sources (S): (B, M, S, F) × (B, S, 1, F) → (B, M, 1, F)
+    predicted_l1 = torch.sum(bz_rirs_fft * complex_filters.permute(0, 2, 1, 3), dim=2)  # (B, M, F)
+
+    # Target: mean over sources in BZ (dim 1): (B, S, M, F) -> (B, M, F)
+    ptb = torch.mean(bz_rirs_fft, dim=2)  # (B, M, F)
+
+    # Compute L1 loss
+    diff = torch.abs(ptb) - torch.abs(predicted_l1)
+    l1 = torch.mean(diff ** 2)
+
+
+    predicted_l2 = torch.sum(dz_rirs_fft * complex_filters.permute(0, 2, 1, 3), dim=2)
+
+    l2 = torch.mean(torch.abs(predicted_l2) ** 2 )
+
+
+
+
+    return l1 + l2
+
+
+
+
+
+
+
+
+
+
+
 
 
 def zero_loss_functions(loss_data_dict, weights=None, device=None):
