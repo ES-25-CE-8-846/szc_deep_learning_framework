@@ -228,19 +228,20 @@ class TestDataloading(unittest.TestCase):
 class TestTrainer(unittest.TestCase):
     def test_run_epoch(self):
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        sound_snips_len_ms = 1000
+        sound_snips_len_ms = 500
         self.test_dataloader = dataloader.DefaultDataset(
             sound_dataset_root="./testing_data/audio_raw/",
             rir_dataset_root="./testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/test/",
             sound_snip_len=sound_snips_len_ms,
             override_existing=True,
+            limit_used_soundclips=32
         )
 
         torch_dataloader = torch.utils.data.DataLoader(
-            dataset=self.test_dataloader, batch_size=16
+            dataset=self.test_dataloader, batch_size=32
         )
         test_model = models.filter_estimator.FilterEstimatorModel(
-            input_channels=2, output_shape=(3, 2048)
+            input_channels=2, output_shape=(3, 1024)
         )
 
         test_trainer = trainer.Trainer(
@@ -248,7 +249,9 @@ class TestTrainer(unittest.TestCase):
             loss_function=loss_functions.sound_loss,
             model=test_model,
             device=device,
-            filter_length=2048,
+            filter_length=1024,
+            inner_loop_iterations=16,
+            enable_debug_plotting=False,
         )
 
         test_trainer.run_epoch()
@@ -275,8 +278,11 @@ class TestLoss(unittest.TestCase):
 class TestModels(unittest.TestCase):
     def test_filter_estimator(self):
         test_model = models.filter_estimator.FilterEstimatorModel(
-            input_channels=2, output_shape=(3, 2048)
+            input_channels=2, output_shape=(3, 1024)
         )
+
+        torchinfo.summary(test_model)
+
 
 
 if __name__ == "__main__":
