@@ -72,15 +72,15 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
+        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
         )
 
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=None
+            dataloader=torch_dataloader, loss_function=None, model=model
         )
 
-        test_trainer.auralizer(sound_tensor, rirs)
 
     def test_filter_apply(self):
 
@@ -92,11 +92,12 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
+        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
         )
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=None
+            dataloader=torch_dataloader, loss_function=None, model=model
         )
 
         for i, data_dict in enumerate(torch_dataloader):
@@ -122,11 +123,13 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
+        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
+
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
         )
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=None
+            dataloader=torch_dataloader, loss_function=None, model=model
         )
 
         for i, data_dict in enumerate(torch_dataloader):
@@ -228,27 +231,35 @@ class TestDataloading(unittest.TestCase):
 class TestTrainer(unittest.TestCase):
     def test_run_epoch(self):
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        sound_snips_len_ms = 1000
+
+        print(device)
+
+        sound_snips_len_ms = 500
         self.test_dataloader = dataloader.DefaultDataset(
             sound_dataset_root="./testing_data/audio_raw/",
             rir_dataset_root="./testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/test/",
             sound_snip_len=sound_snips_len_ms,
             override_existing=True,
+            limit_used_soundclips=32
         )
 
         torch_dataloader = torch.utils.data.DataLoader(
-            dataset=self.test_dataloader, batch_size=16
+            dataset=self.test_dataloader, batch_size=32
         )
         test_model = models.filter_estimator.FilterEstimatorModel(
-            input_channels=2, output_shape=(3, 2048)
+            input_channels=2, output_shape=(3, 4096)
         )
 
         test_trainer = trainer.Trainer(
             dataloader=torch_dataloader,
-            loss_function=loss_functions.sound_loss,
+            loss_function=loss_functions.sann_loss,
             model=test_model,
             device=device,
-            filter_length=2048,
+            filter_length=4096,
+            inner_loop_iterations=16,
+            save_path='./exp/test_run/',
+            checkpointing_mode='all',
+            enable_debug_plotting=True,
         )
 
         test_trainer.run_epoch()
@@ -271,12 +282,33 @@ class TestLoss(unittest.TestCase):
 
         loss_functions.sound_loss(data_for_loss_dict)
 
+    def test_sann_loss(self):
+
+        bz_rirs = torch.rand(16,3,3,4096)
+        dz_rirs = torch.rand(16,3,12,4096)
+        complex_filters = torch.rand(16,3,2049)
+
+        data_dict = {'bz_rirs':bz_rirs,
+                     'dz_rirs':dz_rirs}
+
+        loss_data_dict = {'complex_filters':complex_filters,
+                          'data_dict':data_dict}
+
+        loss = loss_functions.sann_loss(loss_data_dict)
+
+        print(f"loss {loss}")
+
+
+
 
 class TestModels(unittest.TestCase):
     def test_filter_estimator(self):
         test_model = models.filter_estimator.FilterEstimatorModel(
-            input_channels=2, output_shape=(3, 2048)
+            input_channels=2, output_shape=(3, 1024)
         )
+
+        torchinfo.summary(test_model)
+
 
 
 if __name__ == "__main__":
