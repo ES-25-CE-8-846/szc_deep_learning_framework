@@ -9,6 +9,8 @@ import torch.nn.functional as F
 class FilterEstimatorModel(nn.Module):
     def __init__(self, input_channels, output_shape: Tuple[int, int]) -> None:
         super().__init__()
+        self.output_filter_domain = "time"
+
         self.d1_conv_block1 = self.grouped_1d_conv_block(input_channels, 32, 64)
         self.d1_conv_block2 = self.grouped_1d_conv_block(32, 64, 32)
         self.d1_conv_block3 = self.grouped_1d_conv_block(64, 128, 32)

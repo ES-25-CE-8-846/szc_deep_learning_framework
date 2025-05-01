@@ -1,0 +1,29 @@
+
+training_run:
+  model: "models.filter_estimator.FilterEstimatorModel"
+  loss_function: "training.loss_functions.sound_loss"
+  inner_loop_iterations: 16
+  epochs: 10
+  learning_rate: 0.0001
+  batch_size: 32
+  n_gpus: 1 #not implemented
+  filter_length: 1024
+  savepath: "exp/test_train"
+  checkpointing_mode: "last" #all/last/none
+  sound_snip_length: 500 #ms
+  dataset_path: "./testing_data/"
+
+validation_run: #use the model settings from training_run but explicitly uses a new path for validation
+  dataset_path: ""
+  metrics: #these need to be implemented
+    - "acc"
+    - "pm"
+
+testing_run: #use the model settings from training run but explicitly uses a new path for the testing data
+  enable: false
+  dataset_path: ""
+  metrics:
+    - "acc"
+    - "pm"
+
+

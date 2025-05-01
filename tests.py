@@ -72,12 +72,13 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
+        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
         )
 
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=None
+            dataloader=torch_dataloader, loss_function=None, model=model
         )
 
 
@@ -91,11 +92,12 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
+        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
         )
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=None
+            dataloader=torch_dataloader, loss_function=None, model=model
         )
 
         for i, data_dict in enumerate(torch_dataloader):
@@ -121,11 +123,13 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
+        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
+
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
         )
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=None
+            dataloader=torch_dataloader, loss_function=None, model=model
         )
 
         for i, data_dict in enumerate(torch_dataloader):
@@ -240,19 +244,21 @@ class TestTrainer(unittest.TestCase):
         )
 
         torch_dataloader = torch.utils.data.DataLoader(
-            dataset=self.test_dataloader, batch_size=4
+            dataset=self.test_dataloader, batch_size=32
         )
         test_model = models.filter_estimator.FilterEstimatorModel(
-            input_channels=2, output_shape=(3, 1024)
+            input_channels=2, output_shape=(3, 4096)
         )
 
         test_trainer = trainer.Trainer(
             dataloader=torch_dataloader,
-            loss_function=loss_functions.sound_loss,
+            loss_function=loss_functions.sann_loss,
             model=test_model,
             device=device,
-            filter_length=1024,
+            filter_length=4096,
             inner_loop_iterations=16,
+            save_path='./exp/test_run/',
+            checkpointing_mode='all',
             enable_debug_plotting=True,
         )
 
@@ -282,8 +288,8 @@ class TestLoss(unittest.TestCase):
         dz_rirs = torch.rand(16,3,12,4096)
         complex_filters = torch.rand(16,3,2049)
 
-        data_dict = {'bz_rir':bz_rirs,
-                     'dz_rir':dz_rirs}
+        data_dict = {'bz_rirs':bz_rirs,
+                     'dz_rirs':dz_rirs}
 
         loss_data_dict = {'complex_filters':complex_filters,
                           'data_dict':data_dict}

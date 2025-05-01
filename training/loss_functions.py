@@ -76,13 +76,13 @@ def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
     Loss function based on SANN-PSZ, including L1, L2, L3, and L4 terms.
     """
 
-    bz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['bz_rir'])  # (B, S, M, F)
-    dz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['dz_rir'])  # (B, S, M, F)
+    bz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['bz_rirs'])  # (B, S, M, F)
+    dz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['dz_rirs'])  # (B, S, M, F)
 
-    bz_rirs_fft = bz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)
-    dz_rirs_fft = dz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)
+    # bz_rirs_fft = bz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)
+    # dz_rirs_fft = dz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)de making the combe into a single sweep.[8] The garden, as it was originally laid out, influenced other designers and contributed to def
 
-    complex_filters = loss_data_dict['complex_filters'].unsqueeze(2)  # (B, S, 1, F)
+    complex_filters = loss_data_dict['filters_frq'].unsqueeze(2)  # (B, S, 1, F)
 
     # === L1: Matching desired pressure in BZ ===
     predicted_l1 = torch.sum(bz_rirs_fft * complex_filters.permute(0, 2, 1, 3), dim=2)  # (B, M, F)
@@ -102,7 +102,7 @@ def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
     # === L4: Enforce time-domain compactness ===
     # Create window and dummy bandpass filter
     filter_len = 512  # Choose based on inverse FFT target size
-    time_filters = torch.fft.irfft(loss_data_dict['complex_filters'], n=filter_len)  # (B, S, T)
+    time_filters = torch.fft.irfft(loss_data_dict['filters_frq'], n=filter_len)  # (B, S, T)
 
     # Window function (e.g. inverted Hann)
     w = 1.0 - torch.hann_window(filter_len, periodic=False).to(time_filters.device)
@@ -130,22 +130,49 @@ def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
     else:
         loss = l1 + l2 + l3 + l4
 
+
+
+    ##### the following is for plotting ######
+
+    dry_sound = loss_data_dict["gt_sound"]
+
+    # print(f"dry sound shape {dry_sound.size()}")
+
+    dry_sound_len = dry_sound.size()[2]
+    hann_window = torch.windows.hann(dry_sound_len)
+
+    # cropping is needed to have the same dimensions in the fft output
+    bz_input_sound = loss_data_dict["bz_input"][:, :, 0:dry_sound_len]
+    dz_input_sound = loss_data_dict["dz_input"][:, :, 0:dry_sound_len]
+    if device is not None:
+        dry_sound = dry_sound.to(device)
+        hann_window = hann_window.to(device)
+        bz_input_sound = bz_input_sound.to(device)
+        dz_input_sound = dz_input_sound.to(device)
+
+    # compute the desired frequency responses
+    des_bz_h = torch.fft.rfft(dry_sound * hann_window)
+    des_dz_h = torch.fft.rfft(torch.zeros_like(dry_sound))
+
+    # compute the measured frequency responses
+    bz_h = torch.fft.rfft(bz_input_sound * hann_window)
+    dz_h = torch.fft.rfft(dz_input_sound * hann_window)
+
+
+
+
     loss_dict = {'loss':loss,
                  'filter_len':filter_len,
                  'bandpass_filter':bandpass_filter,
                  'l1':l1,
                  'l2':l2,
                  'l3':l3,
-                 'l4':l4}
+                 'l4':l4,
+                 "fft_bz": bz_h,
+                 "fft_dz": dz_h,
+                 "fft_bz_des": des_bz_h}
 
     return loss_dict
-
-
-
-
-
-
-
 
 
 

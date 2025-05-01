@@ -1,11 +1,15 @@
+from warnings import filters
 import torch
 from torch._C import device
+from torch.utils.checkpoint import checkpoint
 import torchaudio
 import wandb
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
 import torchinfo
+import os
+import glob
 
 
 class Trainer:
@@ -18,6 +22,8 @@ class Trainer:
         optimizer=torch.optim.AdamW,
         filter_length=2048,
         inner_loop_iterations=16,
+        checkpointing_mode = "none",
+        save_path = "",
         enable_debug_plotting=False,
     ) -> None:
         self.model = model
@@ -26,12 +32,25 @@ class Trainer:
         self.filter_length = filter_length
         self.device = device
         self.inner_loop_iterations = inner_loop_iterations
+        self.checkpointing_mode = checkpointing_mode
+        self.save_path = save_path
         self.enable_debug_plotting = enable_debug_plotting
 
         if device is not None:
             self.model = self.model.to(device)
 
         self.optimizer = optimizer(self.model.parameters(), lr=0.001)
+
+        self.current_ep = 1
+
+        if self.checkpointing_mode != 'none':
+            self.checkpoint_path = os.path.join(self.save_path, 'checkpoints')
+            try:
+                os.makedirs(self.checkpoint_path)
+            except Exception as e:
+                os.makedirs(self.checkpoint_path, exist_ok=True)
+                print(e)
+
 
     def auralizer(self, sound, impulse_responses):
         """
@@ -171,11 +190,22 @@ class Trainer:
 
             nn_input = self.format_to_model_input(filtered_sound, bz_microphone_input)
 
-            filters = self.model.forward(nn_input)
+            model_output = self.model.forward(nn_input)
+
+            if self.model.output_filter_domain == "time":
+                filters_frq = torch.fft.rfft(model_output)
+                filters_time = model_output
+            elif self.model.output_filter_domain == "frequency":
+                filters_frq = model_output
+                filters_time = torch.fft.irfft(model_output)
+
+            print(f"filters old shape {old_filters.size()}")
+            print(f"filters time shape {filters_time.size()}")
+            print(f"filters frq shape {filters_frq.size()}")
 
             # listening point is obtained by convolution between the ILZ FIR print(f"output filter shape {filters.size()}")
 
-            filtered_sound = self.apply_filter(sound, filters)
+            filtered_sound = self.apply_filter(sound, filters_time)
             bz_microphone_input = self.auralizer(filtered_sound, bz_rirs)
             dz_microphone_input = self.auralizer(filtered_sound, dz_rirs)
 
@@ -184,7 +214,8 @@ class Trainer:
                 "f_sound": filtered_sound,
                 "bz_input": bz_microphone_input,
                 "dz_input": dz_microphone_input,
-                "filters": filters,
+                "filters_time": filters_time,
+                "filters_frq":filters_frq,
                 "data_dict": data_dict,
             }
 
@@ -197,24 +228,46 @@ class Trainer:
             if self.enable_debug_plotting:
                 self.debug_plotting(data_dict, data_for_loss_dict, loss_dict)
 
-            print(f"loss: {loss}, inner loop iteration: {iteration}")
+            print(f"loss: {loss.item()}, inner loop iteration: {iteration}")
 
             loss.backward()
 
-            for name, param in self.model.named_parameters():
-                if param.grad is not None:
-                    print(f"{name} gradient shape: {param.grad.shape}")
-                    print(param.grad)
-                else:
-                    print(f"{name} has no gradient")
+            # for name, param in self.model.named_parameters():
+            #     if param.grad is not None:
+            #         print(f"{name} gradient shape: {param.grad.shape}")
+            #         print(param.grad)
+            #     else:
+            #         print(f"{name} has no gradient")
 
-            print(f"loss: {loss}, inner loop iteration: {iteration}")
+            # print(f"loss: {loss}, inner loop iteration: {iteration}")
             self.optimizer.step()
             self.optimizer.zero_grad()
 
-            old_filters = filters.detach()
+            old_filters = filters_time.detach()
+        return loss_dict
 
-            # take optimizer step
+        # take optimizer step
+
+    def save_checkpoint(self, current_ep, last_loss):
+        """Function to save the model weights based on the checkpointing_mode and current model weights"""
+
+        if self.checkpointing_mode != 'none':
+            if self.checkpointing_mode == "all":
+                fn = f"chkp_ep{str(current_ep).rjust(3,'0')}_loss{str(last_loss).replace('.','_')}.pth"
+                print(f"saving checkpoint {fn}")
+                torch.save(self.model.state_dict(), os.path.join(self.checkpoint_path, fn))
+
+            elif self.checkpointing_mode == "last":
+
+                fn = f"chkp_loss{str(last_loss).replace('.','_')}.pth"
+                # ensure all files are removed so we only store the last model
+                old_files = glob.glob(f"{self.checkpoint_path}/*")
+                for file in old_files:
+                    os.remove(file)
+
+                print(f"saving checkpoint {fn}")
+                torch.save(self.model.state_dict(), os.path.join(self.checkpoint_path, fn))
+
 
     def debug_plotting(self, data_dict, data_for_loss_dict, loss_dict):
         """
@@ -228,15 +281,15 @@ class Trainer:
         fft_dz = loss_dict["fft_dz"].cpu().detach().numpy()
         fft_bz_des = loss_dict["fft_bz_des"].cpu().detach().numpy()
 
-        filters = data_for_loss_dict["filters"].cpu().detach().numpy()
+        filters = data_for_loss_dict["filters_time"].cpu().detach().numpy()
 
         filter_axis = np.arange(filters.shape[2])
 
         frequency_axis = np.arange(fft_bz_des.shape[2])
         print(f"fft desired bz shape {fft_bz_des.shape}")
         batch_size = fft_bz_des.shape[0]
-        fig, axs = plt.subplots(batch_size, 4)
-        for i in range(batch_size):
+        fig, axs = plt.subplots(3, 4)
+        for i in range(3):
             axs[i, 0].plot(frequency_axis, fft_bz[i, 1, :])
             axs[i, 1].plot(frequency_axis, fft_dz[i, 1, :])
             axs[i, 2].plot(frequency_axis, fft_bz_des[i, 0, :])
@@ -246,11 +299,15 @@ class Trainer:
         plt.show()
 
     def run_epoch(self):
+        """Function to initialize running an epoch"""
         for data_dict in self.dataloader:
+            # enusre all data is passed to the correct device
             if self.device is not None:
                 for key in data_dict.keys():
                     data_dict[key] = data_dict[key].to(self.device)
 
-            self.run_inner_feedback_training(data_dict, self.inner_loop_iterations)
+            loss_dict = self.run_inner_feedback_training(data_dict, self.inner_loop_iterations)
 
-            pass
+        self.save_checkpoint(current_ep=self.current_ep, last_loss=loss_dict['loss'].item())
+        self.current_ep += 1
+
