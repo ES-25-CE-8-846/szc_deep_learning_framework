@@ -1,6 +1,6 @@
 from operator import matmul
 import torch
-
+import torch.nn.functional as F
 
 def sound_loss(loss_data_dict, weights=None, device=None):
     """
@@ -73,39 +73,72 @@ def sound_loss(loss_data_dict, weights=None, device=None):
 
 def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
     """
-    Loss function based on SANN-PSZ
+    Loss function based on SANN-PSZ, including L1, L2, L3, and L4 terms.
     """
-    # Apply RFFT to bz_rirs: (B, S, M, T) -> (B, S, M, F)
-    bz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['bz_rir'])  # shape: (B, S, M, F)
-    dz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['dz_rir'])  # shape: (B, S, M, F)
 
-    # Permute to (B, M, S, F) to match with complex_filters: (B, S, F)
+    bz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['bz_rir'])  # (B, S, M, F)
+    dz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['dz_rir'])  # (B, S, M, F)
+
     bz_rirs_fft = bz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)
     dz_rirs_fft = dz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)
 
-    # Unsqueeze filter dims to (B, S, 1, F)
     complex_filters = loss_data_dict['complex_filters'].unsqueeze(2)  # (B, S, 1, F)
 
-    # Multiply and sum over sources (S): (B, M, S, F) × (B, S, 1, F) → (B, M, 1, F)
+    # === L1: Matching desired pressure in BZ ===
     predicted_l1 = torch.sum(bz_rirs_fft * complex_filters.permute(0, 2, 1, 3), dim=2)  # (B, M, F)
-
-    # Target: mean over sources in BZ (dim 1): (B, S, M, F) -> (B, M, F)
     ptb = torch.mean(bz_rirs_fft, dim=2)  # (B, M, F)
+    l1 = torch.mean((torch.abs(ptb) - torch.abs(predicted_l1)) ** 2)
 
-    # Compute L1 loss
-    diff = torch.abs(ptb) - torch.abs(predicted_l1)
-    l1 = torch.mean(diff ** 2)
+    # === L2: Suppress energy in DZ ===
+    predicted_l2 = torch.sum(dz_rirs_fft * complex_filters.permute(0, 2, 1, 3), dim=2)  # (B, M, F)
+    l2 = torch.mean(torch.abs(predicted_l2) ** 2)
 
+    # === L3: Limit gain amplitude ===
+    g_max = 1.0
+    gain_mag = torch.abs(complex_filters)  # (B, S, F)
+    excess = torch.clamp(gain_mag - g_max, min=0.0)
+    l3 = torch.mean(excess ** 2)
 
-    predicted_l2 = torch.sum(dz_rirs_fft * complex_filters.permute(0, 2, 1, 3), dim=2)
+    # === L4: Enforce time-domain compactness ===
+    # Create window and dummy bandpass filter
+    filter_len = 512  # Choose based on inverse FFT target size
+    time_filters = torch.fft.irfft(loss_data_dict['complex_filters'], n=filter_len)  # (B, S, T)
 
-    l2 = torch.mean(torch.abs(predicted_l2) ** 2 )
+    # Window function (e.g. inverted Hann)
+    w = 1.0 - torch.hann_window(filter_len, periodic=False).to(time_filters.device)
+    w = w.view(1, 1, -1)
 
+    # Dummy bandpass filter - replace with real FIR filter
+    bandpass_filter = torch.ones(1, 1, 33, device=time_filters.device) / 33  # simple lowpass
 
+    # Convolve time filters with bandpass
+    filt = F.conv1d(
+        time_filters.view(-1, 1, filter_len),  # (B*S, 1, T)
+        bandpass_filter,
+        padding='same'
+    ).view_as(time_filters)  # (B, S, T)
 
+    # Apply window
+    filt_weighted = filt * w
 
-    return l1 + l2
+    # Energy of weighted signal
+    l4 = torch.mean(filt_weighted ** 2)
 
+    # === Combine Losses ===
+    if weights is not None:
+        loss = weights[0] * l1 + (1 - weights[0]) * l2 + weights[1] * l3 + weights[2] * l4
+    else:
+        loss = l1 + l2 + l3 + l4
+
+    loss_dict = {'loss':loss,
+                 'filter_len':filter_len,
+                 'bandpass_filter':bandpass_filter,
+                 'l1':l1,
+                 'l2':l2,
+                 'l3':l3,
+                 'l4':l4}
+
+    return loss_dict
 
 
 
