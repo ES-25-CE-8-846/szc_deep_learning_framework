@@ -48,7 +48,7 @@ if __name__ == "__main__":
 
 
 
-    os.makedirs(save_path)
+    os.makedirs(save_path, exist_ok=True)
     shutil.copy(args.config_path, os.path.join(save_path,"config.yaml"))
 
     # === Set device ===
