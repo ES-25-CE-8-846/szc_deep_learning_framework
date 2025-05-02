@@ -3,15 +3,19 @@ training_run:
   model: "models.filter_estimator.FilterEstimatorModel"
   loss_function: "training.loss_functions.sound_loss"
   inner_loop_iterations: 16
-  epochs: 10
+  epochs: 5
   learning_rate: 0.0001
-  batch_size: 32
+  batch_size: 64
   n_gpus: 1 #not implemented
   filter_length: 1024
-  savepath: "exp/test_train"
-  checkpointing_mode: "last" #all/last/none
   sound_snip_length: 500 #ms
-  dataset_path: "./testing_data/"
+  limit_used_sound_snips: 500
+  sound_dataset_path: "./testing_data/audio_raw/"
+  rir_dataset_path: "./testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/train/"
+  savepath: "exp/test_train_with_soundloss"
+  checkpointing_mode: "last" #all/last/none
+  log_to_wandb: true
+  wandb_key_path: "/home/ai/.wandb.key"
 
 validation_run: #use the model settings from training_run but explicitly uses a new path for validation
   dataset_path: ""
