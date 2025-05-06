@@ -208,6 +208,96 @@ class ModelInteraction:
 
 
 
+class UserCommandDispatcher:
+    def __init__(self, bz_sounds, dz_sounds):
+        """Function to handle user command"""
+        self.should_continue = True
+        self.sound = np.zeros(10)
+        self.bz_sounds = bz_sounds
+        self.dz_sounds = dz_sounds
+        self.command_to_function_dict = {
+            "p":self.play_sound,
+            "save":self.save_sound,
+            "sds":self.sound_device_selector,
+            "ss":self.sound_selector,
+            "svs":self.save_sound,
+            "nr":self.next_room,
+            "help":self.helper,
+            }
+
+
+    def helper(self):
+        """Function to help"""
+        for key in self.command_to_function_dict:
+            print(key)
+            print(self.command_to_function_dict[key].__doc__)
+
+    def next_room(self):
+        """Function to go to the next room"""
+        self.should_continue = False
+
+    def sound_selector(self):
+        """Function to have the user select the sound to play"""
+        i = 0
+        n_bz = 0
+        n_dz = 0
+        for sound in self.bz_sounds[0,:,:]:
+            print(f"bz_{i}")
+            i += 1
+            n_bz += 1
+
+        for sound in self.dz_sounds[0,:,:]:
+            print(f"dz_{i}")
+            i += 1
+            n_dz += 1
+
+        selected_sound_index = int(input("sound: "))
+
+        if selected_sound_index <= n_bz and selected_sound_index >= 0:
+            selected_sound = self.bz_sounds[0,selected_sound_index,:]
+        elif selected_sound_index > n_bz and selected_sound_index <= n_dz:
+            selected_sound = self.dz_sounds[0,selected_sound_index,:]
+        else:
+            print("sound dont exist")
+
+        self.sound = selected_sound
+
+
+    def sound_device_selector(self):
+        """Function to select the sound device"""
+        print("available devices")
+        print(sd.query_devices())
+        selected_device = int(input("select: "))
+        sd.default.device = selected_device
+
+
+    def play_sound(self):
+        """Function to play sound"""
+        print(self.sound)
+        sd.play(self.sound)
+
+    def save_sound(self):
+        """Function to save sound"""
+
+
+    def user_interactor(self):
+
+        while self.should_continue:
+            user_command = input("command: ")
+
+            try:
+                function = self.command_to_function_dict[user_command]
+            except Exception as e:
+                print(f"{e}")
+                function = self.helper
+
+            try:
+                function()
+            except Exception as e:
+                print(f"{e}")
+
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("exp_path")
@@ -291,7 +381,17 @@ if __name__ == "__main__":
         bz_sound = model_interacter.auralizer(filtered_sound, bz_rirs)
         dz_sound = model_interacter.auralizer(filtered_sound, dz_rirs)
 
+        print(f"room {i}")
+        user_command_dispatcher = UserCommandDispatcher(bz_sound, dz_sound)
+        user_command_dispatcher.user_interactor()
         print(bz_sound.size())
+
+
+
+
+
+
+
 
 
 
