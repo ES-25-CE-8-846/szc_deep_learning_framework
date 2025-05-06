@@ -8,21 +8,15 @@ import models
 from training import dataloader
 from training import trainer #we use some helper functions from this
 import torch
+from torch._C import device
+import torch.nn.functional as F
+import numpy as np
 
 def get_class_or_func(path):
     module_name, func_name = path.rsplit(".", 1)
     module = importlib.import_module(module_name)
     return getattr(module, func_name)
 
-import torch
-from torch._C import device
-import wandb
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
-import numpy as np
-import torchinfo
-import os
-import glob
 
 class ModelInteraction:
     def __init__(
@@ -289,7 +283,6 @@ if __name__ == "__main__":
 
         filters = evaluation_data['filters_time']
 
-
         filtered_sound = model_interacter.apply_filter(testing_sound_tensor, filters)
 
         bz_rirs = data_dict['bz_rirs']
@@ -297,7 +290,6 @@ if __name__ == "__main__":
 
         bz_sound = model_interacter.auralizer(filtered_sound, bz_rirs)
         dz_sound = model_interacter.auralizer(filtered_sound, dz_rirs)
-
 
         print(bz_sound.size())
 
