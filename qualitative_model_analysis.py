@@ -241,6 +241,7 @@ class UserCommandDispatcher:
         i = 0
         n_bz = 0
         n_dz = 0
+
         for sound in self.bz_sounds[0,:,:]:
             print(f"bz_{i}")
             i += 1
@@ -255,8 +256,11 @@ class UserCommandDispatcher:
 
         if selected_sound_index <= n_bz and selected_sound_index >= 0:
             selected_sound = self.bz_sounds[0,selected_sound_index,:]
-        elif selected_sound_index > n_bz and selected_sound_index <= n_dz:
-            selected_sound = self.dz_sounds[0,selected_sound_index,:]
+
+        elif selected_sound_index > n_bz and selected_sound_index <= n_dz + n_bz:
+
+            selected_sound = self.dz_sounds[0,selected_sound_index - (n_bz),:]
+
         else:
             print("sound dont exist")
 
@@ -356,7 +360,10 @@ if __name__ == "__main__":
     model_state_dict_fn = os.listdir(os.path.join(save_path, "checkpoints"))[0] # make this user selectebel later
     state_dict_path = os.path.join(save_path, "checkpoints", model_state_dict_fn)
 
-    model.load_state_dict(torch.load(state_dict_path, weights_only=True))
+    if torch.cuda.is_available():
+        model.load_state_dict(torch.load(state_dict_path, weights_only=True))
+    else:
+        model.load_state_dict(torch.load(state_dict_path, weights_only=True, map_location=torch.device('cpu')))
 
 
     model_interacter = ModelInteraction(model = model,
