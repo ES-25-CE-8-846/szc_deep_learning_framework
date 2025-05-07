@@ -5,8 +5,8 @@ training_run:
   inner_loop_iterations: 16
   epochs: 5
   learning_rate: 0.0001
-  batch_size: 64
-  n_gpus: 2 #not implemented
+  batch_size: 128
+  n_gpus: 2
   filter_length: 4096
   sound_snip_length: 500 #ms
   limit_used_sound_snips: 500
