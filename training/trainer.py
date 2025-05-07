@@ -11,13 +11,17 @@ import torchinfo
 import os
 import glob
 
+
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed import init_process_group, destroy_process_group
 class Trainer:
     def __init__(
         self,
         model,
         dataloader,
         loss_function,
-        device=None,
+        rank,
+        world_size,
         optimizer=torch.optim.AdamW,
         filter_length=2048,
         inner_loop_iterations=16,
@@ -30,15 +34,17 @@ class Trainer:
         self.dataloader = dataloader
         self.loss_function = loss_function
         self.filter_length = filter_length
-        self.device = device
+        self.device = rank
+        self.rank = rank
         self.inner_loop_iterations = inner_loop_iterations
         self.checkpointing_mode = checkpointing_mode
         self.save_path = save_path
-        self.enable_debug_plotting = enable_debug_plotting
-        self.log_to_wandb = log_to_wandb
+        self.enable_debug_plotting = enable_debug_plotting and rank == 0
+        self.log_to_wandb = log_to_wandb and rank == 0
 
-        if device is not None:
-            self.model = self.model.to(device)
+        torch.cuda.set_device(rank)
+        self.model = self.model.to(rank)
+        self.ddp_model = DDP(self.model, device_ids=[device])
 
         self.optimizer = optimizer(self.model.parameters(), lr=0.001)
 
@@ -191,7 +197,7 @@ class Trainer:
 
             nn_input = self.format_to_model_input(filtered_sound, bz_microphone_input)
 
-            model_output = self.model.forward(nn_input)
+            model_output = self.ddp_model.forward(nn_input)
 
             if self.model.output_filter_domain == "time":
                 filters_frq = torch.fft.rfft(model_output)
@@ -200,11 +206,6 @@ class Trainer:
                 filters_frq = model_output
                 filters_time = torch.fft.irfft(model_output)
 
-            # print(f"filters old shape {old_filters.size()}")
-            # print(f"filters time shape {filters_time.size()}")
-            # print(f"filters frq shape {filters_frq.size()}")
-
-            # listening point is obtained by convolution between the ILZ FIR print(f"output filter shape {filters.size()}")
 
             filtered_sound = self.apply_filter(sound, filters_time)
             bz_microphone_input = self.auralizer(filtered_sound, bz_rirs)
@@ -222,14 +223,12 @@ class Trainer:
 
             loss_dict = self.loss_function(data_for_loss_dict, device=self.device)
             loss = loss_dict["loss"]
-            # print("filters requires grad:", filters.requires_grad)
-            # print("filtered_sound grad_fn:", filterd_sound.requires_grad)
-            # print("loss grad_fn:", loss.grad_fn)
 
             if self.enable_debug_plotting:
                 self.debug_plotting(data_dict, data_for_loss_dict, loss_dict)
 
-            print(f"loss: {loss.item()}, inner loop iteration: {iteration}")
+            if self.rank == 0:
+                print(f"loss: {loss.item()}, inner loop iteration: {iteration}")
 
             loss.backward()
 
@@ -301,9 +300,11 @@ class Trainer:
         torchinfo.summary(self.model)
         plt.show()
 
-    def run_epoch(self):
+    def run_epoch(self, epoch):
         """Function to initialize running an epoch"""
         total_batches = len(self.dataloader)
+
+        self.dataloader.sampler.set_epoch(epoch)
 
         for i, data_dict in enumerate(self.dataloader):
             # Ensure all data is passed to the correct device
@@ -313,12 +314,13 @@ class Trainer:
 
             loss_dict = self.run_inner_feedback_training(data_dict, self.inner_loop_iterations)
 
-            percent_done = (i + 1) / total_batches * 100
-            print(f"epoch {self.current_ep}: {percent_done:.2f}% complete")
+            if self.rank == 0:
+                percent_done = (i + 1) / total_batches * 100
+                print(f"epoch {self.current_ep}: {percent_done:.2f}% complete")
 
             if self.log_to_wandb:
                 self.wandb_logger(loss_dict)
 
-        print()  # for newline after progress
-        self.save_checkpoint(current_ep=self.current_ep, last_loss=loss_dict['loss'].item())
-        self.current_ep += 1
+        if self.rank == 0:
+            self.save_checkpoint(current_ep=self.current_ep, last_loss=loss_dict['loss'].item())
+            self.current_ep += 1

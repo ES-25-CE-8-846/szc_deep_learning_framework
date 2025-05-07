@@ -7,11 +7,80 @@ from training import dataloader, trainer  # Assuming your custom Trainer class i
 import os
 import shutil
 import wandb
+import torch.multiprocessing as mp
+from torch.utils.data.distributed import DistributedSampler
+from torch.distributed import init_process_group, destroy_process_group
 
 def get_class_or_func(path):
     module_name, func_name = path.rsplit(".", 1)
     module = importlib.import_module(module_name)
     return getattr(module, func_name)
+
+def ddp_setup(rank: int, world_size: int):
+   """
+   Args:
+       rank: Unique identifier of each process
+      world_size: Total number of processes
+   """
+   torch.cuda.set_device(rank)
+   init_process_group(backend="nccl", rank=rank, world_size=world_size)
+
+
+def train(rank, world_size, config):
+    ddp_setup(rank, world_size)
+    loss_function = get_class_or_func(config['loss_function'])
+    dataset = config['dataset']
+    model = config['model']
+
+    filter_length = config['filter_length']
+    inner_loop_iterations = config['inner_loop_iterations']
+    save_path = config['savepath']
+    checkpointing_mode = config['checkpointing_mode']
+    epochs = config['epochs']
+    log_to_wandb = config['log_to_wandb']
+    batch_size = config['batch_size']
+    wandb_key_path = config['wandb_key_path']
+
+    if log_to_wandb and rank == 0:
+        with open(wandb_key_path, 'r') as wandb_key_file:
+            wandb.login(key=wandb_key_file.read().strip(), relogin=True)
+
+        run = wandb.init(name=save_path,
+            # Set the wandb entity where your project will be logged (generally your team name).
+            entity="avs-846",
+            # Set the wandb project where this run will be logged.
+            project="test-scz",
+            # Track hyperparameters and run metadata.
+            config=config
+        )
+
+
+    torch_dataloader = torch.utils.data.DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        num_workers=4,
+        sampler=DistributedSampler(dataset)
+    )
+
+    training_loop = trainer.Trainer(
+        dataloader=torch_dataloader,
+        loss_function=loss_function,
+        model=model,
+        world_size=world_size,
+        rank=rank,
+        filter_length=filter_length,
+        inner_loop_iterations=inner_loop_iterations,
+        save_path=save_path,
+        checkpointing_mode=checkpointing_mode,
+        log_to_wandb=log_to_wandb,
+    )
+
+    # === wandb init ===
+
+    # === Run Training ===
+    for epoch in range(epochs):
+        print(f"=== Running Epoch {epoch + 1}/{epochs} ===")
+        training_loop.run_epoch(epoch)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -36,6 +105,7 @@ if __name__ == "__main__":
     batch_size = training_config['batch_size']
     filter_length = training_config['filter_length']
     inner_loop_iterations = training_config['inner_loop_iterations']
+    n_gpus = training_config['n_gpus']
     save_path = training_config['savepath']
     checkpointing_mode = training_config['checkpointing_mode']
     learning_rate = training_config['learning_rate']
@@ -45,14 +115,12 @@ if __name__ == "__main__":
     log_to_wandb = training_config['log_to_wandb']
     wandb_key_path = training_config['wandb_key_path']
 
-
-
+    assert batch_size % n_gpus == 0
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '22355'  # use a free port
 
     os.makedirs(save_path, exist_ok=True)
     shutil.copy(args.config_path, os.path.join(save_path,"config.yaml"))
-
-    # === Set device ===
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
     # === Build Dataset & DataLoader ===
     dataset = dataloader.DefaultDataset(
@@ -63,11 +131,8 @@ if __name__ == "__main__":
         override_existing=True  # Add this if needed
     )
 
-    torch_dataloader = torch.utils.data.DataLoader(
-        dataset=dataset,
-        batch_size=batch_size,
-        shuffle=True
-    )
+
+    training_config['dataset'] = dataset
 
     # === Instantiate Model ===
     model = model_class(
@@ -75,35 +140,13 @@ if __name__ == "__main__":
         output_shape=(3, filter_length)  # Adjust based on number of sources/mics
     )
 
-    # === Create Trainer ===
-    training_loop = trainer.Trainer(
-        dataloader=torch_dataloader,
-        loss_function=loss_function,
-        model=model,
-        device=device,
-        filter_length=filter_length,
-        inner_loop_iterations=inner_loop_iterations,
-        save_path=save_path,
-        checkpointing_mode=checkpointing_mode,
-        log_to_wandb=log_to_wandb,
-    )
+    training_config['model'] = model
 
-    # === wandb init ===
+    world_size = n_gpus
+    mp.spawn(
+            train,
+            args=(world_size, training_config),
+            nprocs=world_size,
+            join=True
+            )
 
-    if log_to_wandb:
-        with open(wandb_key_path, 'r') as wandb_key_file:
-            wandb.login(key=wandb_key_file.read().strip(), relogin=True)
-
-        run = wandb.init(name=save_path,
-            # Set the wandb entity where your project will be logged (generally your team name).
-            entity="avs-846",
-            # Set the wandb project where this run will be logged.
-            project="test-scz",
-            # Track hyperparameters and run metadata.
-            config=training_config
-        )
-
-    # === Run Training ===
-    for epoch in range(epochs):
-        print(f"=== Running Epoch {epoch + 1}/{epochs} ===")
-        training_loop.run_epoch()

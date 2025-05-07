@@ -1,0 +1,33 @@
+
+training_run:
+  model: "models.modified_sann.AudioFilterEstimatorFreq"
+  loss_function: "training.loss_functions.sann_loss"
+  inner_loop_iterations: 16
+  epochs: 5
+  learning_rate: 0.0001
+  batch_size: 64
+  n_gpus: 2 #not implemented
+  filter_length: 4096
+  sound_snip_length: 500 #ms
+  limit_used_sound_snips: 500
+  sound_dataset_path: "./testing_data/audio_raw/"
+  rir_dataset_path: "./testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/train/"
+  savepath: "exp/test_train_with_sann_loss"
+  checkpointing_mode: "last" #all/last/none
+  log_to_wandb: true
+  wandb_key_path: "/home/ai/.wandb.key"
+
+validation_run: #use the model settings from training_run but explicitly uses a new path for validation
+  dataset_path: ""
+  metrics: #these need to be implemented
+    - "acc"
+    - "pm"
+
+testing_run: #use the model settings from training run but explicitly uses a new path for the testing data
+  enable: false
+  dataset_path: ""
+  metrics:
+    - "acc"
+    - "pm"
+
+
