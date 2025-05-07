@@ -11,7 +11,6 @@ import torchinfo
 import os
 import glob
 
-
 class Trainer:
     def __init__(
         self,
@@ -24,6 +23,7 @@ class Trainer:
         inner_loop_iterations=16,
         checkpointing_mode = "none",
         save_path = "",
+        log_to_wandb = False,
         enable_debug_plotting=False,
     ) -> None:
         self.model = model
@@ -35,6 +35,7 @@ class Trainer:
         self.checkpointing_mode = checkpointing_mode
         self.save_path = save_path
         self.enable_debug_plotting = enable_debug_plotting
+        self.log_to_wandb = log_to_wandb
 
         if device is not None:
             self.model = self.model.to(device)
@@ -199,9 +200,9 @@ class Trainer:
                 filters_frq = model_output
                 filters_time = torch.fft.irfft(model_output)
 
-            print(f"filters old shape {old_filters.size()}")
-            print(f"filters time shape {filters_time.size()}")
-            print(f"filters frq shape {filters_frq.size()}")
+            # print(f"filters old shape {old_filters.size()}")
+            # print(f"filters time shape {filters_time.size()}")
+            # print(f"filters frq shape {filters_frq.size()}")
 
             # listening point is obtained by convolution between the ILZ FIR print(f"output filter shape {filters.size()}")
 
@@ -268,6 +269,8 @@ class Trainer:
                 print(f"saving checkpoint {fn}")
                 torch.save(self.model.state_dict(), os.path.join(self.checkpoint_path, fn))
 
+    def wandb_logger(self, loss_dict):
+        wandb.log(data={"training_loss":loss_dict['loss'].item()})
 
     def debug_plotting(self, data_dict, data_for_loss_dict, loss_dict):
         """
@@ -300,14 +303,22 @@ class Trainer:
 
     def run_epoch(self):
         """Function to initialize running an epoch"""
-        for data_dict in self.dataloader:
-            # enusre all data is passed to the correct device
+        total_batches = len(self.dataloader)
+
+        for i, data_dict in enumerate(self.dataloader):
+            # Ensure all data is passed to the correct device
             if self.device is not None:
                 for key in data_dict.keys():
                     data_dict[key] = data_dict[key].to(self.device)
 
             loss_dict = self.run_inner_feedback_training(data_dict, self.inner_loop_iterations)
 
+            percent_done = (i + 1) / total_batches * 100
+            print(f"epoch {self.current_ep}: {percent_done:.2f}% complete")
+
+            if self.log_to_wandb:
+                self.wandb_logger(loss_dict)
+
+        print()  # for newline after progress
         self.save_checkpoint(current_ep=self.current_ep, last_loss=loss_dict['loss'].item())
         self.current_ep += 1
-

@@ -1,15 +1,12 @@
 import argparse
 import yaml
 import importlib
-import models
-import training
-
-models.filter_estimator.FilterEstimatorModel
-
-parser = argparse.ArgumentParser()
-parser.add_argument("config_path")
-args = parser.parse_args()
-
+import torch
+import torch.utils.data
+from training import dataloader, trainer  # Assuming your custom Trainer class is here
+import os
+import shutil
+import wandb
 
 def get_class_or_func(path):
     module_name, func_name = path.rsplit(".", 1)
@@ -17,16 +14,96 @@ def get_class_or_func(path):
     return getattr(module, func_name)
 
 if __name__ == "__main__":
-    config_path = args.config_path
+    parser = argparse.ArgumentParser()
+    parser.add_argument("config_path")
+    args = parser.parse_args()
 
-    with open(config_path, 'r') as f:
+
+
+    # Load config
+    with open(args.config_path, 'r') as f:
         config = yaml.safe_load(f)
 
-    print(config)
-
-    model_class = get_class_or_func(config['training_run']['model'])
-    loss_function = get_class_or_func(config['training_run']['loss_function'])
+    training_config = config['training_run']
 
 
+    # === Get components from config ===
+    model_class = get_class_or_func(training_config['model'])
+    loss_function = get_class_or_func(training_config['loss_function'])
+
+    sound_dataset_path = training_config['sound_dataset_path']
+    rir_dataset_path = training_config['rir_dataset_path']
+    batch_size = training_config['batch_size']
+    filter_length = training_config['filter_length']
+    inner_loop_iterations = training_config['inner_loop_iterations']
+    save_path = training_config['savepath']
+    checkpointing_mode = training_config['checkpointing_mode']
+    learning_rate = training_config['learning_rate']
+    sound_snip_len = training_config['sound_snip_length']
+    limit_uses_sound_snips = training_config['limit_used_sound_snips']
+    epochs = training_config['epochs']
+    log_to_wandb = training_config['log_to_wandb']
+    wandb_key_path = training_config['wandb_key_path']
 
 
+
+
+    os.makedirs(save_path, exist_ok=True)
+    shutil.copy(args.config_path, os.path.join(save_path,"config.yaml"))
+
+    # === Set device ===
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+    # === Build Dataset & DataLoader ===
+    dataset = dataloader.DefaultDataset(
+        sound_dataset_root=sound_dataset_path,
+        rir_dataset_root=rir_dataset_path,
+        sound_snip_len=sound_snip_len,
+        limit_used_soundclips=limit_uses_sound_snips,
+        override_existing=True  # Add this if needed
+    )
+
+    torch_dataloader = torch.utils.data.DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        shuffle=True
+    )
+
+    # === Instantiate Model ===
+    model = model_class(
+        input_channels=2,  # Update as needed
+        output_shape=(3, filter_length)  # Adjust based on number of sources/mics
+    )
+
+    # === Create Trainer ===
+    training_loop = trainer.Trainer(
+        dataloader=torch_dataloader,
+        loss_function=loss_function,
+        model=model,
+        device=device,
+        filter_length=filter_length,
+        inner_loop_iterations=inner_loop_iterations,
+        save_path=save_path,
+        checkpointing_mode=checkpointing_mode,
+        log_to_wandb=log_to_wandb,
+    )
+
+    # === wandb init ===
+
+    if log_to_wandb:
+        with open(wandb_key_path, 'r') as wandb_key_file:
+            wandb.login(key=wandb_key_file.read().strip(), relogin=True)
+
+        run = wandb.init(name=save_path,
+            # Set the wandb entity where your project will be logged (generally your team name).
+            entity="avs-846",
+            # Set the wandb project where this run will be logged.
+            project="test-scz",
+            # Track hyperparameters and run metadata.
+            config=training_config
+        )
+
+    # === Run Training ===
+    for epoch in range(epochs):
+        print(f"=== Running Epoch {epoch + 1}/{epochs} ===")
+        training_loop.run_epoch()
