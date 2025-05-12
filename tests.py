@@ -1,5 +1,5 @@
 from ctypes.util import test
-from cffi.api import model
+from warnings import filters
 from torch._subclasses.fake_tensor import torch_decomp_decompositions
 from torch.nn.modules import loss
 from training import dataloader
@@ -72,7 +72,9 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
-        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
+        model = models.filter_estimator.FilterEstimatorModel(
+            input_channels=2, output_shape=(3, 100)
+        )
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
         )
@@ -80,7 +82,6 @@ class TestDataloading(unittest.TestCase):
         test_trainer = trainer.Trainer(
             dataloader=torch_dataloader, loss_function=None, model=model
         )
-
 
     def test_filter_apply(self):
 
@@ -92,7 +93,9 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
-        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
+        model = models.filter_estimator.FilterEstimatorModel(
+            input_channels=2, output_shape=(3, 100)
+        )
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
         )
@@ -123,7 +126,9 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
-        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
+        model = models.filter_estimator.FilterEstimatorModel(
+            input_channels=2, output_shape=(3, 100)
+        )
 
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
@@ -240,7 +245,7 @@ class TestTrainer(unittest.TestCase):
             rir_dataset_root="./testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/test/",
             sound_snip_len=sound_snips_len_ms,
             override_existing=True,
-            limit_used_soundclips=32
+            limit_used_soundclips=32,
         )
 
         torch_dataloader = torch.utils.data.DataLoader(
@@ -257,8 +262,8 @@ class TestTrainer(unittest.TestCase):
             device=device,
             filter_length=4096,
             inner_loop_iterations=16,
-            save_path='./exp/test_run/',
-            checkpointing_mode='all',
+            save_path="./exp/test_run/",
+            checkpointing_mode="all",
             enable_debug_plotting=True,
         )
 
@@ -284,21 +289,17 @@ class TestLoss(unittest.TestCase):
 
     def test_sann_loss(self):
 
-        bz_rirs = torch.rand(16,3,3,4096)
-        dz_rirs = torch.rand(16,3,12,4096)
-        complex_filters = torch.rand(16,3,2049)
+        bz_rirs = torch.rand(16, 3, 3, 4096)
+        dz_rirs = torch.rand(16, 3, 12, 4096)
+        complex_filters = torch.rand(16, 3, 2049)
 
-        data_dict = {'bz_rirs':bz_rirs,
-                     'dz_rirs':dz_rirs}
+        data_dict = {"bz_rirs": bz_rirs, "dz_rirs": dz_rirs}
 
-        loss_data_dict = {'complex_filters':complex_filters,
-                          'data_dict':data_dict}
+        loss_data_dict = {"complex_filters": complex_filters, "data_dict": data_dict}
 
         loss = loss_functions.sann_loss(loss_data_dict)
 
         print(f"loss {loss}")
-
-
 
 
 class TestModels(unittest.TestCase):
@@ -309,6 +310,18 @@ class TestModels(unittest.TestCase):
 
         torchinfo.summary(test_model)
 
+
+class TestEvaluations(unittest.TestCase):
+    def test_acousic_contrast(self):
+        from evaluation.acoustic_contrast import bdr_evaluation, acc_evaluation
+
+        filters = torch.rand((3, 4096))
+        bz_rirs = torch.rand((3, 4, 4096))
+        dz_rirs = torch.rand((3, 12, 4096)) * 0.3
+
+        bdr = bdr_evaluation(filters, bz_rirs, dz_rirs)
+
+        acc = acc_evaluation(filters, bz_rirs, dz_rirs)
 
 
 if __name__ == "__main__":
