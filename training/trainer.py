@@ -1,3 +1,4 @@
+from time import time
 from warnings import filters
 import torch
 from torch._C import device
@@ -11,7 +12,8 @@ import torchinfo
 import os
 import glob
 
-
+from evaluation.acoustic_contrast import acc_evaluation
+import scipy
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 class Trainer:
@@ -22,6 +24,7 @@ class Trainer:
         loss_function,
         rank,
         world_size,
+        validation_dataloader = None,
         optimizer=torch.optim.AdamW,
         filter_length=2048,
         inner_loop_iterations=16,
@@ -32,6 +35,7 @@ class Trainer:
     ) -> None:
         self.model = model
         self.dataloader = dataloader
+        self.validation_dataloader = validation_dataloader
         self.loss_function = loss_function
         self.filter_length = filter_length
         self.device = rank
@@ -67,8 +71,8 @@ class Trainer:
             sound (Tensor): shape (b. n, k) where n = number of speakers, k = sound length
             impulse_responses (Tensor): shape (b, n, m, s) where
                                         b = batch size
-                                        n = number of speakers,
                                         m = number of microphones,
+                                        n = number of speakers,
                                         s = length of impulse response
 
         Returns:
@@ -82,23 +86,16 @@ class Trainer:
 
         mic_output = torch.zeros((B, M, output_len), device=sound.device)
 
-        for b in range(B):
-            for n in range(N):
-                speaker = sound[b, n].view(1, 1, -1)  # [1, 1, K]
-                for m in range(M):
-                    rir = impulse_responses[b, m, n].flip(0).view(1, 1, -1)  # [1, 1, S]
-                    convolved = F.conv1d(speaker, rir, padding=0).squeeze()  # [L]
+        sound = sound.detach().cpu()
+        sound = sound[:,None,:,:]
+        impulse_responses = impulse_responses.detach().cpu()
 
-                    # Pad or trim to match expected output length
-                    if convolved.shape[0] < output_len:
-                        pad_len = output_len - convolved.shape[0]
-                        convolved = F.pad(convolved, (0, pad_len))
-                    elif convolved.shape[0] > output_len:
-                        convolved = convolved[:output_len]
+        mic_output = scipy.signal.fftconvolve(sound, impulse_responses, axes=3)
 
-                    mic_output[b, m] += convolved
+        mic_output = np.sum(mic_output, axis=2)
 
-        return mic_output
+        return torch.from_numpy(mic_output)
+
 
     def apply_filter(self, sound, filters):
         """
@@ -126,18 +123,14 @@ class Trainer:
         output = torch.zeros(B, N, output_len, device=filters.device)
         sound = sound.to(filters.device)
 
-        for b in range(B):
-            input_signal = sound[b].view(1, 1, -1)  # [1, 1, K]
-            for n in range(N):
-                filt = filters[b, n].flip(0).view(1, 1, -1)  # [1, 1, M]
-                conv = F.conv1d(input_signal, filt, padding=0).squeeze()  # [output_len]
+        sound = sound.detach().cpu()
+        sound = sound[:,:,:]
+        filters = filters.detach().cpu()
 
-                # Pad if needed (for safety)
-                if conv.shape[0] < output_len:
-                    conv = F.pad(conv, (0, output_len - conv.shape[0]))
-                output[b, n] = conv
+        output = scipy.signal.fftconvolve(sound, filters, axes=2)
 
-        return output
+        return torch.from_numpy(output)
+
 
     def format_to_model_input(self, output_sound, mic_inputs):
         """
@@ -207,6 +200,7 @@ class Trainer:
                 filters_time = torch.fft.irfft(model_output)
 
 
+
             filtered_sound = self.apply_filter(sound, filters_time)
             bz_microphone_input = self.auralizer(filtered_sound, bz_rirs)
             dz_microphone_input = self.auralizer(filtered_sound, dz_rirs)
@@ -244,6 +238,11 @@ class Trainer:
             self.optimizer.zero_grad()
 
             old_filters = filters_time.detach()
+
+            # compute acoustic contrast for logging
+            acc = acc_evaluation(filters_time.detach().cpu(), bz_rirs.cpu(), dz_rirs.cpu())
+            loss_dict['acc'] = acc
+
         return loss_dict
 
         # take optimizer step
@@ -268,8 +267,9 @@ class Trainer:
                 print(f"saving checkpoint {fn}")
                 torch.save(self.model.state_dict(), os.path.join(self.checkpoint_path, fn))
 
-    def wandb_logger(self, loss_dict):
-        wandb.log(data={"training_loss":loss_dict['loss'].item()})
+    def wandb_logger(self, loss_dict, namespace):
+        wandb.log(data={f"{namespace}_loss":loss_dict['loss'].item(),
+                        f"{namespace}_acc":loss_dict['acc']})
 
     def debug_plotting(self, data_dict, data_for_loss_dict, loss_dict):
         """
@@ -306,7 +306,10 @@ class Trainer:
 
         self.dataloader.sampler.set_epoch(epoch)
 
+        # training step
+        self.ddp_model.train()
         for i, data_dict in enumerate(self.dataloader):
+            time_begin = time()
             # Ensure all data is passed to the correct device
             if self.device is not None:
                 for key in data_dict.keys():
@@ -317,9 +320,34 @@ class Trainer:
             if self.rank == 0:
                 percent_done = (i + 1) / total_batches * 100
                 print(f"epoch {self.current_ep}: {percent_done:.2f}% complete")
+                print(f"time taken {time()-time_begin}")
 
             if self.log_to_wandb:
-                self.wandb_logger(loss_dict)
+                self.wandb_logger(loss_dict, "training")
+
+        # validation step
+
+        if self.validation_dataloader is not None:
+            self.ddp_model.eval()
+            for i, data_dict in enumerate(self.validation_dataloader):
+                # Ensure all data is passed to the correct device
+                if self.device is not None:
+                    for key in data_dict.keys():
+                        data_dict[key] = data_dict[key].to(self.device)
+
+
+                with torch.no_grad():
+                    loss_dict = self.run_inner_feedback_training(data_dict, self.inner_loop_iterations)
+
+                if self.rank == 0:
+                    percent_done = (i + 1) / total_batches * 100
+                    print(f"epoch {self.current_ep}: {percent_done:.2f}% complete")
+
+                # this is more of a temporary logging, the evaluation metrics sohuld be logged as well
+                if self.log_to_wandb:
+                    self.wandb_logger(loss_dict, "validation")
+
+
 
         if self.rank == 0:
             self.save_checkpoint(current_ep=self.current_ep, last_loss=loss_dict['loss'].item())
