@@ -206,6 +206,7 @@ class Trainer:
             dz_microphone_input = self.auralizer(filtered_sound, dz_rirs)
 
             data_for_loss_dict = {
+pkill -9 python
                 "gt_sound": sound,
                 "f_sound": filtered_sound,
                 "bz_input": bz_microphone_input,

@@ -9,102 +9,14 @@ from training import trainer  # we use some helper functions from this
 import torch
 import numpy as np
 from evaluation.model_interaction import ModelInteraction
+from evaluation.acoustic_contrast import acc_evaluation
+
 
 
 def get_class_or_func(path):
     module_name, func_name = path.rsplit(".", 1)
     module = importlib.import_module(module_name)
     return getattr(module, func_name)
-
-
-class UserCommandDispatcher:
-    def __init__(self, bz_sounds, dz_sounds):
-        """Function to handle user command"""
-        self.should_continue = True
-        self.sound = np.zeros(10)
-        self.bz_sounds = bz_sounds
-        self.dz_sounds = dz_sounds
-        self.command_to_function_dict = {
-            "p": self.play_sound,
-            "save": self.save_sound,
-            "sds": self.sound_device_selector,
-            "ss": self.sound_selector,
-            "svs": self.save_sound,
-            "nr": self.next_room,
-            "help": self.helper,
-        }
-
-    def helper(self):
-        """Function to help"""
-        for key in self.command_to_function_dict:
-            print(key)
-            print(self.command_to_function_dict[key].__doc__)
-
-    def next_room(self):
-        """Function to go to the next room"""
-        self.should_continue = False
-
-    def sound_selector(self):
-        """Function to have the user select the sound to play"""
-        i = 0
-        n_bz = 0
-        n_dz = 0
-
-        for sound in self.bz_sounds[0, :, :]:
-            print(f"bz_{i}")
-            i += 1
-            n_bz += 1
-
-        for sound in self.dz_sounds[0, :, :]:
-            print(f"dz_{i}")
-            i += 1
-            n_dz += 1
-
-        selected_sound_index = int(input("sound: "))
-
-        if selected_sound_index <= n_bz and selected_sound_index >= 0:
-            selected_sound = self.bz_sounds[0, selected_sound_index, :]
-
-        elif selected_sound_index > n_bz and selected_sound_index <= n_dz + n_bz:
-
-            selected_sound = self.dz_sounds[0, selected_sound_index - (n_bz), :]
-
-        else:
-            print("sound dont exist")
-
-        self.sound = selected_sound
-
-    def sound_device_selector(self):
-        """Function to select the sound device"""
-        print("available devices")
-        print(sd.query_devices())
-        selected_device = int(input("select: "))
-        sd.default.device = selected_device
-
-    def play_sound(self):
-        """Function to play sound"""
-        print(self.sound)
-        sd.play(self.sound)
-
-    def save_sound(self):
-        """Function to save sound"""
-
-    def user_interactor(self):
-
-        while self.should_continue:
-            user_command = input("command: ")
-
-            try:
-                function = self.command_to_function_dict[user_command]
-            except Exception as e:
-                print(f"{e}")
-                function = self.helper
-
-            try:
-                function()
-            except Exception as e:
-                print(f"{e}")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -133,7 +45,6 @@ if __name__ == "__main__":
         "./testing_data/relaxing-guitar-loop-v5-245859.wav"
     )
     testing_sound = testing_sound[:, 1]
-    sd.default.device = 0
     # print(sd.query_devices())
     # sd.play(testing_sound, sr, blocking=True)
     print(testing_sound)
@@ -150,7 +61,7 @@ if __name__ == "__main__":
     )
 
     torch_dataloader = torch.utils.data.DataLoader(
-        dataset=dataset, batch_size=1, shuffle=True
+        dataset=dataset, batch_size=1, shuffle=False
     )
 
     # === Instantiate Model ===
@@ -188,6 +99,12 @@ if __name__ == "__main__":
 
         filters = evaluation_data["filters_time"]
 
+        bl_filters = torch.zeros_like(filters)
+
+        print(bl_filters.size())
+
+        bl_filters[:,:,0] = 1
+
         filtered_sound = model_interacter.apply_filter(testing_sound_tensor, filters)
 
         bz_rirs = data_dict["bz_rirs"]
@@ -201,7 +118,9 @@ if __name__ == "__main__":
         bz_sound = bz_sound / sound_max_amp
         dz_sound = dz_sound / sound_max_amp
 
-        print(f"room {i}")
-        user_command_dispatcher = UserCommandDispatcher(bz_sound, dz_sound)
-        user_command_dispatcher.user_interactor()
-        print(bz_sound.size())
+        acc = acc_evaluation(filters, bz_rirs, dz_rirs)
+
+
+        acc_bl = acc_evaluation(bl_filters, bz_rirs, dz_rirs)
+
+        print(f"model acc {acc}, base line acc {acc_bl}")

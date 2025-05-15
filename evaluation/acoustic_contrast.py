@@ -1,4 +1,3 @@
-from matplotlib.pyplot import axes
 import torch
 import scipy.signal
 import scipy
@@ -38,37 +37,41 @@ def bdr_evaluation(filters, bz_rirs, dz_rirs) -> np.ndarray:
 def acc_evaluation(filters, bz_rirs, dz_rirs):
     """Function it compute the acc
     Args:
-        filters (torch.Tensor): the filters as a torch tensor shape (S, K) n speakers, filter length
-        bz_rirs (torch.Tensor): the bright zone room impulse responses shape (S, M, L)
+        filters (torch.Tensor): the filters as a torch tensor shape (B, S, K) n speakers, filter length
+        bz_rirs (torch.Tensor): the bright zone room impulse responses shape (B, M, S, L)
             n speakers, n microphones, impulse responses length
-        dz_rirs (torch.Tensor): the dark zone room impulse responses shape (S, M, L)
+        dz_rirs (torch.Tensor): the dark zone room impulse responses shape (B, M, S, L)
             n speakers, n microphones, impulse responses length
     Returns:
         acc (float): the acousitc contrast
     """
-    filters = filters[:, None, :]
+
+    filters = filters[:, None, :, :]
 
     # convolve filters with bz rirs
     filter_bz = np.sum(
-        scipy.signal.fftconvolve(filters, bz_rirs, axes=2), axis=0, keepdims=True
+        scipy.signal.fftconvolve(filters, bz_rirs, axes=3), axis=2, keepdims=True
     )
     filter_dz = np.sum(
-        scipy.signal.fftconvolve(filters, dz_rirs, axes=2), axis=0, keepdims=True
+        scipy.signal.fftconvolve(filters, dz_rirs, axes=3), axis=2, keepdims=True
     )
 
     # compute rfft for bz and dz
-    h_b = scipy.fft.rfftn(filter_bz, axes=2)
-    h_d = scipy.fft.rfftn(filter_dz, axes=2)
+    h_b = scipy.fft.rfftn(filter_bz, axes=3)
+    h_d = scipy.fft.rfftn(filter_dz, axes=3)
 
-    m_b = h_b.shape[0]
-    m_d = h_d.shape[0]
+    m_b = h_b.shape[2]
+    m_d = h_d.shape[2]
 
     # Compute total energy
     E_b = np.sum(np.abs(h_b) ** 2)
     E_d = np.sum(np.abs(h_d) ** 2)
 
     # Compute acoustic contrast
-    acc = 10 * np.log10((m_b * E_b) / (m_d * E_d))
+    acc = 10 * np.log10((m_d * E_b) / (m_b * E_d))
+
+    # compute mean across batch
+    acc = np.mean(acc)
 
     # print(f"acc {acc}, acc_shape {acc.shape}, m_b {m_b}, m_d {m_d}")
     return acc

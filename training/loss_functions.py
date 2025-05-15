@@ -130,10 +130,7 @@ def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
     else:
         loss = l1 + l2 + l3 + l4
 
-
-
     ##### the following is for plotting ######
-
     dry_sound = loss_data_dict["gt_sound"]
 
     # print(f"dry sound shape {dry_sound.size()}")
@@ -157,8 +154,6 @@ def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
     # compute the measured frequency responses
     bz_h = torch.fft.rfft(bz_input_sound * hann_window)
     dz_h = torch.fft.rfft(dz_input_sound * hann_window)
-
-
 
 
     loss_dict = {'loss':loss,

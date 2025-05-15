@@ -13,7 +13,22 @@ import numpy as np
 import models
 import soundfile
 import torchinfo
+import os
 
+from torch.utils.data.distributed import DistributedSampler
+from torch.distributed import init_process_group, destroy_process_group
+
+os.environ["MASTER_ADDR"] = "localhost"
+os.environ["MASTER_PORT"] = "22355"  # use a free port
+
+def ddp_setup(rank: int, world_size: int):
+    """
+    Args:
+        rank: Unique identifier of each process
+       world_size: Total number of processes
+    """
+    torch.cuda.set_device(rank)
+    init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
 class TestDataloading(unittest.TestCase):
     def test_parsing(self):
@@ -80,7 +95,11 @@ class TestDataloading(unittest.TestCase):
         )
 
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=model
+            dataloader=torch_dataloader,
+            loss_function=None,
+            model=model,
+            rank=None,
+            world_size=1,
         )
 
     def test_filter_apply(self):
@@ -100,7 +119,11 @@ class TestDataloading(unittest.TestCase):
             dataset=self.test_dataloader, batch_size=16
         )
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=model
+            dataloader=torch_dataloader,
+            loss_function=None,
+            model=model,
+            rank=None,
+            world_size=1,
         )
 
         for i, data_dict in enumerate(torch_dataloader):
@@ -134,7 +157,11 @@ class TestDataloading(unittest.TestCase):
             dataset=self.test_dataloader, batch_size=16
         )
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=model
+            dataloader=torch_dataloader,
+            loss_function=None,
+            model=model,
+            rank=None,
+            world_size=1,
         )
 
         for i, data_dict in enumerate(torch_dataloader):
@@ -239,6 +266,7 @@ class TestTrainer(unittest.TestCase):
 
         print(device)
 
+        ddp_setup(0,1)
         sound_snips_len_ms = 500
         self.test_dataloader = dataloader.DefaultDataset(
             sound_dataset_root="./testing_data/audio_raw/",
@@ -249,25 +277,27 @@ class TestTrainer(unittest.TestCase):
         )
 
         torch_dataloader = torch.utils.data.DataLoader(
-            dataset=self.test_dataloader, batch_size=32
+            dataset=self.test_dataloader, batch_size=32,sampler=DistributedSampler(self.test_dataloader)
         )
-        test_model = models.filter_estimator.FilterEstimatorModel(
+        test_model = models.modified_sann.AudioFilterEstimatorFreq(
             input_channels=2, output_shape=(3, 4096)
         )
+
 
         test_trainer = trainer.Trainer(
             dataloader=torch_dataloader,
             loss_function=loss_functions.sann_loss,
             model=test_model,
-            device=device,
             filter_length=4096,
             inner_loop_iterations=16,
             save_path="./exp/test_run/",
             checkpointing_mode="all",
             enable_debug_plotting=True,
+            rank=0,
+            world_size=1,
         )
 
-        test_trainer.run_epoch()
+        test_trainer.run_epoch(0)
 
 
 class TestLoss(unittest.TestCase):
@@ -315,13 +345,14 @@ class TestEvaluations(unittest.TestCase):
     def test_acousic_contrast(self):
         from evaluation.acoustic_contrast import bdr_evaluation, acc_evaluation
 
-        filters = torch.rand((3, 4096))
-        bz_rirs = torch.rand((3, 4, 4096))
-        dz_rirs = torch.rand((3, 12, 4096)) * 0.3
+        filters = torch.rand((16, 3, 4096))
+        bz_rirs = torch.rand((16, 4, 3, 4096))
+        dz_rirs = torch.rand((16, 12, 3, 4096)) * 0.5
 
-        bdr = bdr_evaluation(filters, bz_rirs, dz_rirs)
+        # bdr = bdr_evaluation(filters, bz_rirs, dz_rirs)
 
         acc = acc_evaluation(filters, bz_rirs, dz_rirs)
+        print(acc)
 
 
 if __name__ == "__main__":

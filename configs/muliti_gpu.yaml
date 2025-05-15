@@ -12,22 +12,23 @@ training_run:
   limit_used_sound_snips: 500
   sound_dataset_path: "./testing_data/audio_raw/"
   rir_dataset_path: "./testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/train/"
-  savepath: "exp/test_train_with_sann_loss"
+  savepath: "exp/test_train_with_sann_loss_2"
   checkpointing_mode: "last" #all/last/none
   log_to_wandb: true
   wandb_key_path: "/home/ai/.wandb.key"
 
 validation_run: #use the model settings from training_run but explicitly uses a new path for validation
-  dataset_path: ""
+  sound_dataset_path: "../testing_data/audio_raw/"
+  rir_dataset_path: "../testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/val/"
   metrics: #these need to be implemented
     - "acc"
-    - "pm"
+
 
 testing_run: #use the model settings from training run but explicitly uses a new path for the testing data
   enable: false
-  dataset_path: ""
+  sound_dataset_path: "../testing_data/audio_raw/"
+  rir_dataset_path: "../testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/test/"
   metrics:
     - "acc"
-    - "pm"
 
 

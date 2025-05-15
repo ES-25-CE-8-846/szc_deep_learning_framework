@@ -95,6 +95,7 @@ if __name__ == "__main__":
         config = yaml.safe_load(f)
 
     training_config = config["training_run"]
+    validation_config =config[""]
 
     # === Get components from config ===
     model_class = get_class_or_func(training_config["model"])
