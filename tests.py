@@ -331,6 +331,28 @@ class TestLoss(unittest.TestCase):
 
         print(f"loss {loss}")
 
+    def test_acc_loss(self):
+
+        from evaluation.acoustic_contrast import bdr_evaluation, acc_evaluation
+
+        filters = torch.rand((16, 3, 4096))
+        bz_rirs = torch.rand((16, 4, 3, 4096))
+        dz_rirs = torch.rand((16, 12, 3, 4096)) * 0.3
+
+        # bdr = bdr_evaluation(filters, bz_rirs, dz_rirs)
+
+        acc = acc_evaluation(filters, bz_rirs, dz_rirs)
+
+        data_dict = {"bz_rirs": bz_rirs, "dz_rirs": dz_rirs}
+
+        loss_data_dict = {"filters_time": filters, "data_dict": data_dict}
+
+        acc_from_loss = loss_functions.acc_loss(loss_data_dict)
+
+
+        print(f"eval acc {acc}, loss acc {acc_from_loss}")
+
+
 
 class TestModels(unittest.TestCase):
     def test_filter_estimator(self):

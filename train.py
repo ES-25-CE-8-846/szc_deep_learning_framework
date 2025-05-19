@@ -30,18 +30,21 @@ def ddp_setup(rank: int, world_size: int):
 
 def train(rank, world_size, config):
     ddp_setup(rank, world_size)
-    loss_function = get_class_or_func(config["loss_function"])
-    dataset = config["dataset"]
-    model = config["model"]
+    training_config = config["training_run"]
+    loss_function = get_class_or_func(training_config["loss_function"])
+    dataset = config["training_dataset"]
+    validation_dataset = config["validation_dataset"]
+    model = training_config["model"]
+    filter_length = training_config["filter_length"]
+    inner_loop_iterations = training_config["inner_loop_iterations"]
+    save_path = training_config["savepath"]
+    checkpointing_mode = training_config["checkpointing_mode"]
+    epochs = training_config["epochs"]
+    log_to_wandb = training_config["log_to_wandb"]
+    batch_size = training_config["batch_size"]
+    wandb_key_path = training_config["wandb_key_path"]
 
-    filter_length = config["filter_length"]
-    inner_loop_iterations = config["inner_loop_iterations"]
-    save_path = config["savepath"]
-    checkpointing_mode = config["checkpointing_mode"]
-    epochs = config["epochs"]
-    log_to_wandb = config["log_to_wandb"]
-    batch_size = config["batch_size"]
-    wandb_key_path = config["wandb_key_path"]
+
 
     if log_to_wandb and rank == 0:
         with open(wandb_key_path, "r") as wandb_key_file:
@@ -57,6 +60,7 @@ def train(rank, world_size, config):
             config=config,
         )
 
+
     torch_dataloader = torch.utils.data.DataLoader(
         dataset=dataset,
         batch_size=batch_size,
@@ -64,8 +68,16 @@ def train(rank, world_size, config):
         sampler=DistributedSampler(dataset),
     )
 
+    validation_dataloader = torch.utils.data.DataLoader(
+        dataset=validation_dataset,
+        batch_size=batch_size,
+        num_workers=4,
+        sampler=DistributedSampler(dataset),
+    )
+
     training_loop = trainer.Trainer(
         dataloader=torch_dataloader,
+        validation_dataloader=validation_dataloader,
         loss_function=loss_function,
         model=model,
         world_size=world_size,
@@ -95,7 +107,7 @@ if __name__ == "__main__":
         config = yaml.safe_load(f)
 
     training_config = config["training_run"]
-    validation_config =config[""]
+    validation_config =config["validation_run"]
 
     # === Get components from config ===
     model_class = get_class_or_func(training_config["model"])
@@ -116,6 +128,9 @@ if __name__ == "__main__":
     log_to_wandb = training_config["log_to_wandb"]
     wandb_key_path = training_config["wandb_key_path"]
 
+    validation_rir_dataset_path = validation_config["rir_dataset_path"]
+    validation_sound_dataset_path = validation_config["sound_dataset_path"]
+
     assert batch_size % n_gpus == 0
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "22355"  # use a free port
@@ -128,11 +143,24 @@ if __name__ == "__main__":
         sound_dataset_root=sound_dataset_path,
         rir_dataset_root=rir_dataset_path,
         sound_snip_len=sound_snip_len,
+        sound_snip_save_path="/tmp/sound_snips/train/",
         limit_used_soundclips=limit_uses_sound_snips,
         override_existing=True,  # Add this if needed
     )
 
-    training_config["dataset"] = dataset
+    config["training_dataset"] = dataset
+
+
+    validation_dataset = dataloader.DefaultDataset(
+        sound_dataset_root=validation_sound_dataset_path,
+        rir_dataset_root=rir_dataset_path,
+        sound_snip_len=sound_snip_len,
+        sound_snip_save_path="/tmp/sound_snips/val/",
+        limit_used_soundclips=limit_uses_sound_snips,
+        override_existing=False
+    )
+
+    config["validation_dataset"] = validation_dataset
 
     # === Instantiate Model ===
     model = model_class(
@@ -143,4 +171,4 @@ if __name__ == "__main__":
     training_config["model"] = model
 
     world_size = n_gpus
-    mp.spawn(train, args=(world_size, training_config), nprocs=world_size, join=True)
+    mp.spawn(train, args=(world_size, config), nprocs=world_size, join=True)

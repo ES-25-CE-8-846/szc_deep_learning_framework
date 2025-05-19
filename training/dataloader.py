@@ -72,6 +72,9 @@ class DefaultDataset(Dataset):
                     else:
                         removed_snip_counter += 1
 
+                if limit_used_soundclips and snip_counter > limit_used_soundclips:
+                    break
+
             print(snip_counter, removed_snip_counter)
             self.n_sound_snips = snip_counter
         else:
@@ -92,6 +95,8 @@ class DefaultDataset(Dataset):
         if limit_used_soundclips:
             if limit_used_soundclips < self.n_sound_snips:
                 self.n_sound_snips = limit_used_soundclips
+
+        self.sound_clip_inicies = np.arange(self.n_sound_snips)
 
     def filter_snippets(self, filter_by_std, filter_by_mean, sound_tensor):
         std = torch.std(sound_tensor)
@@ -115,15 +120,14 @@ class DefaultDataset(Dataset):
 
 
     def __len__(self):
-        return self.n_rirs * self.n_sound_snips
+        return self.n_rirs
 
 
     def __getitem__(self, index):
 
-        grid_index = np.unravel_index(index, (self.n_rirs, self.n_sound_snips))
 
-        rir_index = grid_index[0]
-        sound_index = grid_index[1]
+        rir_index = index
+        sound_index = np.random.choice(self.n_sound_snips)
 
         sound_fp = os.path.join(self.sound_snip_save_path, f'{sound_index}'.rjust(10,'0') + '.wav')
         sound, sr = torchaudio.load(sound_fp)

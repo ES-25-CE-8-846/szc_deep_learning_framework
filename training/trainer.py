@@ -152,7 +152,7 @@ class Trainer:
 
         # cropping
         out_len = output_sound.size()[2]
-        mic_inputs = mic_inputs[:, :, 0:out_len]
+        mic_inputs = mic_inputs[:, 1:4, 0:out_len]
 
         if device is not None:
             mic_inputs = mic_inputs.to(self.device)
@@ -206,7 +206,6 @@ class Trainer:
             dz_microphone_input = self.auralizer(filtered_sound, dz_rirs)
 
             data_for_loss_dict = {
-pkill -9 python
                 "gt_sound": sound,
                 "f_sound": filtered_sound,
                 "bz_input": bz_microphone_input,
@@ -222,8 +221,6 @@ pkill -9 python
             if self.enable_debug_plotting:
                 self.debug_plotting(data_dict, data_for_loss_dict, loss_dict)
 
-            if self.rank == 0:
-                print(f"loss: {loss.item()}, inner loop iteration: {iteration}")
 
             loss.backward()
 
@@ -243,11 +240,78 @@ pkill -9 python
             # compute acoustic contrast for logging
             acc = acc_evaluation(filters_time.detach().cpu(), bz_rirs.cpu(), dz_rirs.cpu())
             loss_dict['acc'] = acc
+            if self.rank == 0:
+                print(f"loss: {loss.item()}, ac {acc}, inner loop iteration: {iteration}")
 
         return loss_dict
 
         # take optimizer step
 
+    def run_inner_feedback_validation(self, data_dict, n_iterations):
+        """
+        Function to run the inner feedback training loop
+
+        Args:
+            data_dict(dict[sounds, rirs]): dictionary containing the sampled sounds and the room impulse responses
+            n_iterations (int): the amount of iterations to run the inner training loop
+
+        """
+        sound = data_dict["sound"]
+        bz_rirs = data_dict["bz_rirs"]
+        dz_rirs = data_dict["dz_rirs"]
+
+        n_speakers = bz_rirs.size()[2]
+        batch_size = bz_rirs.size()[0]
+        old_filters = torch.ones((batch_size, n_speakers, self.filter_length))
+
+        for iteration in range(n_iterations):
+            filtered_sound = self.apply_filter(sound, old_filters)
+            bz_microphone_input = self.auralizer(sound, bz_rirs)
+
+            nn_input = self.format_to_model_input(filtered_sound, bz_microphone_input)
+
+            model_output = self.ddp_model.forward(nn_input)
+
+            if self.model.output_filter_domain == "time":
+                filters_frq = torch.fft.rfft(model_output)
+                filters_time = model_output
+            elif self.model.output_filter_domain == "frequency":
+                filters_frq = model_output
+                filters_time = torch.fft.irfft(model_output)
+
+
+
+            filtered_sound = self.apply_filter(sound, filters_time)
+            bz_microphone_input = self.auralizer(filtered_sound, bz_rirs)
+            dz_microphone_input = self.auralizer(filtered_sound, dz_rirs)
+
+            data_for_loss_dict = {
+                "gt_sound": sound,
+                "f_sound": filtered_sound,
+                "bz_input": bz_microphone_input,
+                "dz_input": dz_microphone_input,
+                "filters_time": filters_time,
+                "filters_frq":filters_frq,
+                "data_dict": data_dict,
+            }
+
+            loss_dict = self.loss_function(data_for_loss_dict, device=self.device)
+            loss = loss_dict["loss"]
+
+            if self.enable_debug_plotting:
+                self.debug_plotting(data_dict, data_for_loss_dict, loss_dict)
+
+            if self.rank == 0:
+                print(f"loss: {loss.item()}, inner loop iteration: {iteration}")
+
+
+            old_filters = filters_time.detach()
+
+            # compute acoustic contrast for logging
+            acc = acc_evaluation(filters_time.detach().cpu(), bz_rirs.cpu(), dz_rirs.cpu())
+            loss_dict['acc'] = acc
+
+        return loss_dict
     def save_checkpoint(self, current_ep, last_loss):
         """Function to save the model weights based on the checkpointing_mode and current model weights"""
 
@@ -280,9 +344,30 @@ pkill -9 python
             data_for_loss_dict
             loss_dict
         """
-        fft_bz = loss_dict["fft_bz"].cpu().detach().numpy()
-        fft_dz = loss_dict["fft_dz"].cpu().detach().numpy()
-        fft_bz_des = loss_dict["fft_bz_des"].cpu().detach().numpy()
+        dry_sound = data_for_loss_dict["gt_sound"]
+
+        # print(f"dry sound shape {dry_sound.size()}")
+
+        dry_sound_len = dry_sound.size()[2]
+        hann_window = torch.windows.hann(dry_sound_len)
+
+        # cropping is needed to have the same dimensions in the fft output
+        bz_input_sound = data_for_loss_dict["bz_input"][:, :, 0:dry_sound_len]
+        dz_input_sound = data_for_loss_dict["dz_input"][:, :, 0:dry_sound_len]
+
+
+        # compute the desired frequency responses
+        des_bz_h = torch.fft.rfft(dry_sound * hann_window)
+        des_dz_h = torch.fft.rfft(torch.zeros_like(dry_sound))
+
+        # compute the measured frequency responses
+        bz_h = torch.fft.rfft(bz_input_sound * hann_window)
+        dz_h = torch.fft.rfft(dz_input_sound * hann_window)
+
+
+        fft_bz = bz_h
+        fft_dz = dz_h
+        fft_bz_des = des_bz_h
 
         filters = data_for_loss_dict["filters_time"].cpu().detach().numpy()
 
@@ -338,7 +423,7 @@ pkill -9 python
 
 
                 with torch.no_grad():
-                    loss_dict = self.run_inner_feedback_training(data_dict, self.inner_loop_iterations)
+                    loss_dict = self.run_inner_feedback_validation(data_dict, self.inner_loop_iterations)
 
                 if self.rank == 0:
                     percent_done = (i + 1) / total_batches * 100

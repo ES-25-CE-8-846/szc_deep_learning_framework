@@ -121,7 +121,9 @@ if __name__ == "__main__":
     model_class = get_class_or_func(training_config["model"])
 
     sound_dataset_path = training_config["sound_dataset_path"]
+    sound_dataset_path = "./testing_data/audio_raw/"
     rir_dataset_path = training_config["rir_dataset_path"]
+    rir_dataset_path = "./testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/test/"
     batch_size = training_config["batch_size"]
     filter_length = training_config["filter_length"]
     inner_loop_iterations = training_config["inner_loop_iterations"]

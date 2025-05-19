@@ -120,7 +120,6 @@ if __name__ == "__main__":
 
         acc = acc_evaluation(filters, bz_rirs, dz_rirs)
 
-
         acc_bl = acc_evaluation(bl_filters, bz_rirs, dz_rirs)
 
         print(f"model acc {acc}, base line acc {acc_bl}")

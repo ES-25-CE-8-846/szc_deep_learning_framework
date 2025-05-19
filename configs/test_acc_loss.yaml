@@ -1,18 +1,18 @@
 
 training_run:
   model: "models.modified_sann.AudioFilterEstimatorFreq"
-  loss_function: "training.loss_functions.sann_loss"
-  inner_loop_iterations: 1
+  loss_function: "training.loss_functions.acc_loss"
+  inner_loop_iterations: 8
   epochs: 5
   learning_rate: 0.0001
-  batch_size: 256
+  batch_size: 128
   n_gpus: 2
   filter_length: 4096
   sound_snip_length: 500 #ms
   limit_used_sound_snips: 5000
   sound_dataset_path: "/home/ai/datasets/audio/LibriSpeech/train-clean-100/"
   rir_dataset_path: "/home/ai/datasets/audio/dataset/shoebox/run2/train/"
-  savepath: "exp/test_train_with_sann_loss_2"
+  savepath: "exp/test_train_with_acc_loss"
   checkpointing_mode: "all" #all/last/none
   log_to_wandb: true
   wandb_key_path: "/home/ai/.wandb.key"

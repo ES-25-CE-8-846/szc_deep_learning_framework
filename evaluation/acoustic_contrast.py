@@ -46,6 +46,8 @@ def acc_evaluation(filters, bz_rirs, dz_rirs):
         acc (float): the acousitc contrast
     """
 
+    # print(f"---scipy np---")
+
     filters = filters[:, None, :, :]
 
     # convolve filters with bz rirs
@@ -56,9 +58,13 @@ def acc_evaluation(filters, bz_rirs, dz_rirs):
         scipy.signal.fftconvolve(filters, dz_rirs, axes=3), axis=2, keepdims=True
     )
 
+    # print(f"filter_bz shape {filter_bz.shape}, filter_bz max {np.max(filter_bz)}")
+
     # compute rfft for bz and dz
-    h_b = scipy.fft.rfftn(filter_bz, axes=3)
-    h_d = scipy.fft.rfftn(filter_dz, axes=3)
+    h_b = np.fft.rfft(filter_bz, axis=3)
+    h_d = np.fft.rfft(filter_dz, axis=3)
+
+    # print(f'h_b shape {h_b.shape}, h_b abs max {np.max(np.abs(h_b))}')
 
     m_b = h_b.shape[2]
     m_d = h_d.shape[2]
@@ -67,8 +73,13 @@ def acc_evaluation(filters, bz_rirs, dz_rirs):
     E_b = np.sum(np.abs(h_b) ** 2)
     E_d = np.sum(np.abs(h_d) ** 2)
 
+    # print(f"E_b  {E_b}")
+
+    cr = (m_d * E_b) / (m_b * E_d)
+
+    # print(f"cr {cr}")
     # Compute acoustic contrast
-    acc = 10 * np.log10((m_d * E_b) / (m_b * E_d))
+    acc = 10 * np.log10(cr)
 
     # compute mean across batch
     acc = np.mean(acc)
