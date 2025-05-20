@@ -61,8 +61,8 @@ if __name__ == "__main__":
     # === Get components from config ===
     model_class = get_class_or_func(training_config["model"])
 
-    sound_dataset_path = training_config["sound_dataset_path"]
-    rir_dataset_path = training_config["rir_dataset_path"]
+    sound_dataset_path = testing_config["sound_dataset_path"]
+    rir_dataset_path = testing_config["rir_dataset_path"]
     batch_size = training_config["batch_size"]
     filter_length = training_config["filter_length"]
     inner_loop_iterations = training_config["inner_loop_iterations"]
@@ -124,7 +124,15 @@ if __name__ == "__main__":
     testing_sound = testing_sound[np.newaxis, np.newaxis, :]
     testing_sound_tensor = torch.tensor(testing_sound).to(torch.float)
 
-    for i, data_dict in enumerate(torch_dataloader):
+    # create filter result dict
+    filter_result_dict = {}
+    baseline_filters.append("model")
+    for filter_name in baseline_filters:
+        filter_result_dict[filter_name] = {}
+        for metric in testing_metrics:
+            filter_result_dict[filter_name][metric] = []
+
+    for i, data_dict in tqdm(enumerate(torch_dataloader)):
         evaluation_data = model_interacter.run_inner_feedback_testing(data_dict, 16)
 
         filters = evaluation_data["filters_time"]
@@ -162,20 +170,20 @@ if __name__ == "__main__":
             bz_sound = bz_sound / sound_max_amp
             dz_sound = dz_sound / sound_max_amp
             filter_results = {}
-            print(filter_name)
+            # print(filter_name)
             for metric in testing_metrics:
                 if metric == "sd":
                     result = normalized_signal_distortion(
                         testing_sound, f, bz_rirs, bz_sound
                     )
-                    print(f"sd {result}")
+                    # print(f"sd {result}")
                 elif metric == "acc":
                     result = acc_evaluation(f, bz_rirs, dz_rirs)
-                    print(f"acc {result}")
+                    # print(f"acc {result}")
                 elif metric == "ae":
                     result = torch.mean(array_effort(f, bz_rirs))
 
-                metrics_results_dict[metric].append(result)
+                filter_result_dict[filter_name][metric].append(result)
 
             # for metric, result in zip(metrics_results_dict.keys(), metrics_results_dict.values()):
             #     print(f"{metric}: {10 * np.log10(result[-1])}")

@@ -356,7 +356,7 @@ class TestLoss(unittest.TestCase):
 
         data_dict = {"bz_rirs": bz_rirs, "dz_rirs": dz_rirs}
 
-        loss_data_dict = {"complex_filters": complex_filters, "data_dict": data_dict}
+        loss_data_dict = {"filters_frq": complex_filters, "data_dict": data_dict}
 
         loss = loss_functions.sann_loss(loss_data_dict)
 
@@ -381,6 +381,17 @@ class TestLoss(unittest.TestCase):
         acc_from_loss = loss_functions.acc_loss(loss_data_dict)
 
         print(f"eval acc {acc}, loss acc {acc_from_loss}")
+
+    def test_sd_loss(self):
+        bz_rirs = torch.rand(16, 3, 3, 4096)
+        dz_rirs = torch.rand(16, 3, 12, 4096)
+        complex_filters = torch.rand(16, 3, 2049)
+
+        data_dict = {"bz_rirs": bz_rirs, "dz_rirs": dz_rirs}
+
+        loss_data_dict = {"filters_time": complex_filters, "data_dict": data_dict}
+
+        loss_functions.signal_distortion_loss(loss_data_dict)
 
 
 class TestModels(unittest.TestCase):

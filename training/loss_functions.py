@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import scipy.signal
 import numpy as np
+import soundfile
 
 
 def _normalize(tensor, dim=-1, eps=1e-8):
@@ -19,6 +20,7 @@ def _normalize(tensor, dim=-1, eps=1e-8):
     """
     max_val = torch.amax(torch.abs(tensor), dim=dim, keepdim=True)
     return tensor / (max_val + eps)
+
 
 def sound_loss(loss_data_dict, weights=None, device=None):
     """
@@ -94,87 +96,99 @@ def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
     Loss function based on SANN-PSZ, including L1, L2, L3, and L4 terms.
     """
 
-    bz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['bz_rirs'])  # (B, S, M, F)
-    dz_rirs_fft = torch.fft.rfft(loss_data_dict['data_dict']['dz_rirs'])  # (B, S, M, F)
+    bz_rirs_fft = torch.fft.rfft(loss_data_dict["data_dict"]["bz_rirs"])  # (B, S, M, F)
+    dz_rirs_fft = torch.fft.rfft(loss_data_dict["data_dict"]["dz_rirs"])  # (B, S, M, F)
 
     # bz_rirs_fft = bz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)
     # dz_rirs_fft = dz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)de making the combe into a single sweep.[8] The garden, as it was originally laid out, influenced other designers and contributed to def
 
-    complex_filters = loss_data_dict['filters_frq'].unsqueeze(2)  # (B, S, 1, F)
+    complex_filters = loss_data_dict["filters_frq"].unsqueeze(2)  # (B, S, 1, F)
 
     # === L1: Matching desired pressure in BZ ===
-    predicted_l1 = torch.sum(bz_rirs_fft * complex_filters.permute(0, 2, 1, 3), dim=2)  # (B, M, F)
+    predicted_l1 = torch.sum(
+        bz_rirs_fft * complex_filters.permute(0, 2, 1, 3), dim=2
+    )  # (B, M, F)
     ptb = torch.mean(bz_rirs_fft, dim=2)  # (B, M, F)
     l1 = torch.mean((torch.abs(ptb) - torch.abs(predicted_l1)) ** 2)
 
     # === L2: Suppress energy in DZ ===
-    predicted_l2 = torch.sum(dz_rirs_fft * complex_filters.permute(0, 2, 1, 3), dim=2)  # (B, M, F)
+    predicted_l2 = torch.sum(
+        dz_rirs_fft * complex_filters.permute(0, 2, 1, 3), dim=2
+    )  # (B, M, F)
     l2 = torch.mean(torch.abs(predicted_l2) ** 2)
 
     # === L3: Limit gain amplitude ===
     g_max = 1.0
     gain_mag = torch.abs(complex_filters)  # (B, S, F)
     excess = torch.clamp(gain_mag - g_max, min=0.0)
-    l3 = torch.mean(excess ** 2)
+    l3 = torch.mean(excess**2)
 
     # === L4: Enforce time-domain compactness ===
     # Create window and dummy bandpass filter
     filter_len = 512  # Choose based on inverse FFT target size
-    time_filters = torch.fft.irfft(loss_data_dict['filters_frq'], n=filter_len)  # (B, S, T)
+    time_filters = torch.fft.irfft(
+        loss_data_dict["filters_frq"], n=filter_len
+    )  # (B, S, T)
 
     # Window function (e.g. inverted Hann)
     w = 1.0 - torch.hann_window(filter_len, periodic=False).to(time_filters.device)
     w = w.view(1, 1, -1)
 
     # Dummy bandpass filter - replace with real FIR filter
-    bandpass_filter = torch.ones(1, 1, 33, device=time_filters.device) / 33  # simple lowpass
+    bandpass_filter = (
+        torch.ones(1, 1, 33, device=time_filters.device) / 33
+    )  # simple lowpass
 
     # Convolve time filters with bandpass
     filt = F.conv1d(
         time_filters.view(-1, 1, filter_len),  # (B*S, 1, T)
         bandpass_filter,
-        padding='same'
-    ).view_as(time_filters)  # (B, S, T)
+        padding="same",
+    ).view_as(
+        time_filters
+    )  # (B, S, T)
 
     # Apply window
     filt_weighted = filt * w
 
     # Energy of weighted signal
-    l4 = torch.mean(filt_weighted ** 2)
+    l4 = torch.mean(filt_weighted**2)
 
     # === Combine Losses ===
     if weights is not None:
-        loss = weights[0] * l1 + (1 - weights[0]) * l2 + weights[1] * l3 + weights[2] * l4
+        loss = (
+            weights[0] * l1 + (1 - weights[0]) * l2 + weights[1] * l3 + weights[2] * l4
+        )
     else:
         loss = l1 + l2 + l3 + l4
 
     ##### the following is for plotting ######
 
-    loss_dict = {'loss':loss,
-                 'filter_len':filter_len,
-                 'bandpass_filter':bandpass_filter,
-                 'l1':l1,
-                 'l2':l2,
-                 'l3':l3,
-                 'l4':l4}
-
+    loss_dict = {
+        "loss": loss,
+        "filter_len": filter_len,
+        "bandpass_filter": bandpass_filter,
+        "l1": l1,
+        "l2": l2,
+        "l3": l3,
+        "l4": l4,
+    }
 
     return loss_dict
 
 
-
 def acc_loss(loss_data_dict, weights=None, device=None):
     """Function to compute acoustic contrast loss, mimicking fftconvolve behavior."""
-    bz_rirs = loss_data_dict['data_dict']['bz_rirs']   # shape: (B, M, S, L)
-    dz_rirs = loss_data_dict['data_dict']['dz_rirs']
-    filters = loss_data_dict['filters_time']           # shape: (B, S, K)
+    bz_rirs = loss_data_dict["data_dict"]["bz_rirs"]  # shape: (B, M, S, L)
+    dz_rirs = loss_data_dict["data_dict"]["dz_rirs"]
+    filters = loss_data_dict["filters_time"]  # shape: (B, S, K)
 
     # print(f"---torch ---")
-    filters = filters[:, None, :, :]                   # shape: (B, 1, S, K)
+    filters = filters[:, None, :, :]  # shape: (B, 1, S, K)
 
     rir_len = bz_rirs.size(-1)
     filt_len = filters.size(-1)
-    conv_len = rir_len + filt_len - 1                  # fftconvolve output length
+    conv_len = rir_len + filt_len - 1  # fftconvolve output length
 
     # Pad filters and RIRs to match fftconvolve output length
     filters_padded = F.pad(filters, (0, conv_len - filt_len))
@@ -182,10 +196,9 @@ def acc_loss(loss_data_dict, weights=None, device=None):
     dz_rirs_padded = F.pad(dz_rirs, (0, conv_len - rir_len))
 
     # FFT along time axis
-    filters_frq = torch.fft.rfft(filters_padded, n=conv_len, dim=-1)      # (B, 1, S, F)
-    bz_frq = torch.fft.rfft(bz_rirs_padded, n=conv_len, dim=-1)           # (B, M, S, F)
+    filters_frq = torch.fft.rfft(filters_padded, n=conv_len, dim=-1)  # (B, 1, S, F)
+    bz_frq = torch.fft.rfft(bz_rirs_padded, n=conv_len, dim=-1)  # (B, M, S, F)
     dz_frq = torch.fft.rfft(dz_rirs_padded, n=conv_len, dim=-1)
-
 
     # Multiply and sum over speakers
     filtered_bz = torch.sum(filters_frq * bz_frq, dim=2)  # shape: (B, M, F)
@@ -199,7 +212,6 @@ def acc_loss(loss_data_dict, weights=None, device=None):
 
     # print(f"energy_bz {energy_bz}")
 
-
     # Normalize by number of microphones
     M_b = bz_rirs.shape[1]
     M_d = dz_rirs.shape[1]
@@ -209,11 +221,15 @@ def acc_loss(loss_data_dict, weights=None, device=None):
     # print(f"contrast_ratio {contrast_ratio}")
 
     # Acoustic contrast (negative because loss is minimized)
-    acc_loss_val = (10 * torch.log10(contrast_ratio + 1e-10))
+    acc_loss_val = 10 * torch.log10(contrast_ratio + 1e-10)
+
+    return {"loss": 1 / acc_loss_val}
 
 
-
-    return {'loss':1 / acc_loss_val}
+signal_distortion_reference_sound, sr = soundfile.read(
+    "./training/loss_function_reference_data/sd_reference.wav"
+)
+sd_reference = torch.tensor(signal_distortion_reference_sound)
 
 
 def signal_distortion_loss(loss_data_dict, weights=None, device=None):
@@ -222,10 +238,17 @@ def signal_distortion_loss(loss_data_dict, weights=None, device=None):
     L2 loss between the desired output (dry sound convolved with RIRs)
     and the actual CNN-produced bright zone input signal.
     """
-    dry_sound = loss_data_dict["gt_sound"]           # (B, S, T)
-    bz_rirs = loss_data_dict["data_dict"]["bz_rirs"] # (B, M, S, L)
-    filters = loss_data_dict["filters_time"]         # (B, S, K)
-    bz_input = loss_data_dict["bz_input"]            # (B, M, T)
+    # dry_sound = loss_data_dict["gt_sound"]  # (B, S, T)
+    bz_rirs = loss_data_dict["data_dict"]["bz_rirs"]  # (B, M, S, L)
+
+    B, M, S, L = bz_rirs.shape
+
+    dry_sound = sd_reference
+    dry_sound = torch.ones((B, S, dry_sound.size()[-1])) * dry_sound
+
+    bz_rirs = loss_data_dict["data_dict"]["bz_rirs"]  # (B, M, S, L)
+    filters = loss_data_dict["filters_time"]  # (B, S, K)
+    # bz_input = loss_data_dict["bz_input"]  # (B, M, T)
 
     batch_size, num_speakers, dry_len = dry_sound.shape
     _, num_mics, _, rir_len = bz_rirs.shape
@@ -237,23 +260,25 @@ def signal_distortion_loss(loss_data_dict, weights=None, device=None):
     # Pad signals and filters for FFT-based convolution
     dry_sound_padded = F.pad(dry_sound, (0, conv_len - dry_len))
     bz_rirs_padded = F.pad(bz_rirs, (0, conv_len - rir_len))
-    filters_padded = F.pad(filters, (0, conv_len - filt_len)).unsqueeze(1)  # (B, 1, S, L)
+    filters_padded = F.pad(filters, (0, conv_len - filt_len)).unsqueeze(
+        1
+    )  # (B, 1, S, L)
 
     # FFT
-    dry_fft = torch.fft.rfft(dry_sound_padded, n=conv_len, dim=-1)         # (B, 1, S, F)
-    rirs_fft = torch.fft.rfft(bz_rirs_padded, n=conv_len, dim=-1)          # (B, M, S, F)
-    filters_fft = torch.fft.rfft(filters_padded, n=conv_len, dim=-1)       # (B, 1, S, F)
+    dry_fft = torch.fft.rfft(dry_sound_padded, n=conv_len, dim=-1)  # (B, 1, S, F)
+    rirs_fft = torch.fft.rfft(bz_rirs_padded, n=conv_len, dim=-1)  # (B, M, S, F)
+    filters_fft = torch.fft.rfft(filters_padded, n=conv_len, dim=-1)  # (B, 1, S, F)
 
     # Multiply dry_sound and RIRs (simulating dry signal through environment)
-    desired_fft = (dry_fft * rirs_fft)                                     # (B, M, S, F)
-    desired_fft = torch.sum(desired_fft, dim=2)                            # sum over speakers → (B, M, F)
+    desired_fft = dry_fft * rirs_fft  # (B, M, S, F)
+    desired_fft = torch.sum(desired_fft, dim=2)  # sum over speakers → (B, M, F)
 
     # Multiply filters and RIRs (actual system output)
-    actual_fft = (filters_fft * rirs_fft)                                  # (B, M, S, F)
-    actual_fft = torch.sum(actual_fft, dim=2)                              # (B, M, F)
+    actual_fft = filters_fft * rirs_fft  # (B, M, S, F)
+    actual_fft = torch.sum(actual_fft, dim=2)  # (B, M, F)
 
     # IFFT to time domain
-    desired = torch.fft.irfft(desired_fft, n=conv_len, dim=-1)             # (B, M, T)
+    desired = torch.fft.irfft(desired_fft, n=conv_len, dim=-1)  # (B, M, T)
     actual = torch.fft.irfft(actual_fft, n=conv_len, dim=-1)
 
     # Truncate to original dry sound length
@@ -261,20 +286,20 @@ def signal_distortion_loss(loss_data_dict, weights=None, device=None):
     actual = _normalize(actual[..., :dry_len])
 
     # L2 loss between desired and actual sound
-    signal_distortion = torch.mean((desired - actual)**2)#/torch.mean(desired**2)
+    signal_distortion = torch.mean((desired - actual) ** 2)  # /torch.mean(desired**2)
 
     return {"loss": signal_distortion}
 
 
-
-def sd_acc_loss(loss_data_dict, weights=[10,1], device=None):
+def sd_acc_loss(loss_data_dict, weights=[10, 1], device=None):
     """Function to compute loss based on the acoustic contrast and signal distortion"""
     if weights is None:
         weights = [1, 1]
 
-    return {'loss': acc_loss(loss_data_dict)['loss']*weights[0] + signal_distortion_loss(loss_data_dict)['loss']*weights[1]}
-
-
+    return {
+        "loss": acc_loss(loss_data_dict)["loss"] * weights[0]
+        + signal_distortion_loss(loss_data_dict)["loss"] * weights[1]
+    }
 
 
 def zero_loss_functions(loss_data_dict, weights=None, device=None):
