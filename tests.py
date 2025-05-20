@@ -21,6 +21,7 @@ from torch.distributed import init_process_group, destroy_process_group
 os.environ["MASTER_ADDR"] = "localhost"
 os.environ["MASTER_PORT"] = "22355"  # use a free port
 
+
 def ddp_setup(rank: int, world_size: int):
     """
     Args:
@@ -29,6 +30,7 @@ def ddp_setup(rank: int, world_size: int):
     """
     torch.cuda.set_device(rank)
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
+
 
 class TestDataloading(unittest.TestCase):
     def test_parsing(self):
@@ -49,6 +51,34 @@ class TestDataloading(unittest.TestCase):
         self.assertIn("dz_rirs", data_dict.keys())
         self.assertIn("bz_rirs", data_dict.keys())
         self.assertIn("sr", data_dict.keys())
+
+        self.assertTrue(
+            self.test_dataloader[0]["sound"].size()[1]
+            == self.test_dataloader[0]["sr"] * (sound_snips_len_ms / 1000)
+        )
+
+    def test_filter_loading(self):
+
+        sound_snips_len_ms = 1000
+
+        self.test_dataloader = dataloader.DefaultDataset(
+            sound_dataset_root="/home/ai/datasets/audio/LibriSpeech/train-clean-100/19/",
+            rir_dataset_root="/home/ai/datasets/audio/dataset/shoebox/run2/test/",
+            sound_snip_len=sound_snips_len_ms,
+            override_existing=True,
+            load_pre_computed_filters=True,
+        )
+
+        self.assertTrue(self.test_dataloader.__len__() > 0)
+        data_dict = self.test_dataloader[0]
+
+        self.assertIn("sound", data_dict.keys())
+        self.assertIn("dz_rirs", data_dict.keys())
+        self.assertIn("bz_rirs", data_dict.keys())
+        self.assertIn("sr", data_dict.keys())
+        self.assertIn("precomp_filters", data_dict.keys())
+
+        print(data_dict["precomp_filters"])
 
         self.assertTrue(
             self.test_dataloader[0]["sound"].size()[1]
@@ -266,7 +296,7 @@ class TestTrainer(unittest.TestCase):
 
         print(device)
 
-        ddp_setup(0,1)
+        ddp_setup(0, 1)
         sound_snips_len_ms = 500
         self.test_dataloader = dataloader.DefaultDataset(
             sound_dataset_root="./testing_data/audio_raw/",
@@ -277,12 +307,13 @@ class TestTrainer(unittest.TestCase):
         )
 
         torch_dataloader = torch.utils.data.DataLoader(
-            dataset=self.test_dataloader, batch_size=32,sampler=DistributedSampler(self.test_dataloader)
+            dataset=self.test_dataloader,
+            batch_size=32,
+            sampler=DistributedSampler(self.test_dataloader),
         )
         test_model = models.modified_sann.AudioFilterEstimatorFreq(
             input_channels=2, output_shape=(3, 4096)
         )
-
 
         test_trainer = trainer.Trainer(
             dataloader=torch_dataloader,
@@ -349,9 +380,7 @@ class TestLoss(unittest.TestCase):
 
         acc_from_loss = loss_functions.acc_loss(loss_data_dict)
 
-
         print(f"eval acc {acc}, loss acc {acc_from_loss}")
-
 
 
 class TestModels(unittest.TestCase):
@@ -375,6 +404,17 @@ class TestEvaluations(unittest.TestCase):
 
         acc = acc_evaluation(filters, bz_rirs, dz_rirs)
         print(acc)
+
+    def test_array_effort(self):
+        from evaluation.array_effort import array_effort
+
+        filters = torch.rand((16, 3, 4096))
+        bz_rirs = torch.rand((16, 4, 3, 4096))
+        dz_rirs = torch.rand((16, 12, 3, 4096)) * 0.5
+
+        ae = array_effort(filters, bz_rirs)
+
+        print(ae.size())
 
 
 if __name__ == "__main__":

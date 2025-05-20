@@ -10,13 +10,29 @@ import torch
 import numpy as np
 from evaluation.model_interaction import ModelInteraction
 from evaluation.acoustic_contrast import acc_evaluation
-
+from evaluation.distortion import normalized_signal_distortion
+from evaluation.array_effort import array_effort
+from tqdm import tqdm
 
 
 def get_class_or_func(path):
     module_name, func_name = path.rsplit(".", 1)
     module = importlib.import_module(module_name)
     return getattr(module, func_name)
+
+
+def load_signal_distortion_test_sound():
+    sound_file_dir = "./testing_data/signal_distortion_soundfiles/"
+    full_testing_sound = []
+    sound_files = sorted(os.listdir(sound_file_dir))
+    print("loading signal distortion test sound")
+    for sound_file in tqdm(sound_files):
+        testing_sound, sr = soundfile.read(os.path.join(sound_file_dir, sound_file))
+        full_testing_sound.append(testing_sound)
+
+    concatenated_sound = np.concatenate(full_testing_sound)
+    return concatenated_sound, sr
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -28,6 +44,19 @@ if __name__ == "__main__":
         config = yaml.safe_load(f)
 
     training_config = config["training_run"]
+    testing_config = config["testing_run"]
+    sd_test_sound = np.zeros(10)
+    testing_metrics = testing_config["metrics"]
+    baseline_filters = testing_config["baseline_filters"]
+    print(f"testing metrics {testing_metrics}")
+
+    metrics_results_dict = {}
+
+    for metric in testing_metrics:
+        if metric == "sd":
+            sd_test_sound = load_signal_distortion_test_sound()
+
+        metrics_results_dict[metric] = []
 
     # === Get components from config ===
     model_class = get_class_or_func(training_config["model"])
@@ -54,10 +83,11 @@ if __name__ == "__main__":
 
     dataset = dataloader.DefaultDataset(
         sound_dataset_root=sound_dataset_path,
-        rir_dataset_root=rir_dataset_path,
+        rir_dataset_root=test_rirs_path,
         sound_snip_len=sound_snip_len,
         limit_used_soundclips=42,
         override_existing=True,  # Add this if needed
+        load_pre_computed_filters=True,
     )
 
     torch_dataloader = torch.utils.data.DataLoader(
@@ -98,28 +128,55 @@ if __name__ == "__main__":
         evaluation_data = model_interacter.run_inner_feedback_testing(data_dict, 16)
 
         filters = evaluation_data["filters_time"]
+        precomp_filters = evaluation_data["data_dict"]["precomp_filters"]
 
-        bl_filters = torch.zeros_like(filters)
+        dirac_filters = torch.zeros_like(filters)
+        dirac_filters[:, :, 0] = 1
 
-        print(bl_filters.size())
+        filters_to_test = {}
 
-        bl_filters[:,:,0] = 1
+        filters_to_test["model"] = filters
 
-        filtered_sound = model_interacter.apply_filter(testing_sound_tensor, filters)
+        for filter_name in baseline_filters:
+            if filter_name == "dirac":
+                filters_to_test[filter_name] = dirac_filters
+            elif filter_name == "vast":
+                filters_to_test[filter_name] = precomp_filters["q_vast"]
+            elif filter_name == "acc":
+                filters_to_test[filter_name] = precomp_filters["q_acc"]
+            elif filter_name == "pm":
+                filters_to_test[filter_name] = precomp_filters["q_pm"]
 
-        bz_rirs = data_dict["bz_rirs"]
-        dz_rirs = data_dict["dz_rirs"]
+        for filter_name, f in zip(filters_to_test.keys(), filters_to_test.values()):
 
-        bz_sound = model_interacter.auralizer(filtered_sound, bz_rirs)
-        dz_sound = model_interacter.auralizer(filtered_sound, dz_rirs)
+            filtered_sound = model_interacter.apply_filter(testing_sound_tensor, f)
 
-        sound_max_amp = torch.max(torch.abs(torch.cat((bz_sound, dz_sound), dim=1)))
+            bz_rirs = data_dict["bz_rirs"]
+            dz_rirs = data_dict["dz_rirs"]
 
-        bz_sound = bz_sound / sound_max_amp
-        dz_sound = dz_sound / sound_max_amp
+            bz_sound = model_interacter.auralizer(filtered_sound, bz_rirs)
+            dz_sound = model_interacter.auralizer(filtered_sound, dz_rirs)
 
-        acc = acc_evaluation(filters, bz_rirs, dz_rirs)
+            sound_max_amp = torch.max(torch.abs(torch.cat((bz_sound, dz_sound), dim=1)))
 
-        acc_bl = acc_evaluation(bl_filters, bz_rirs, dz_rirs)
+            bz_sound = bz_sound / sound_max_amp
+            dz_sound = dz_sound / sound_max_amp
+            filter_results = {}
+            print(filter_name)
+            for metric in testing_metrics:
+                if metric == "sd":
+                    result = normalized_signal_distortion(
+                        testing_sound, f, bz_rirs, bz_sound
+                    )
+                    print(f"sd {result}")
+                elif metric == "acc":
+                    result = acc_evaluation(f, bz_rirs, dz_rirs)
+                    print(f"acc {result}")
+                elif metric == "ae":
+                    result = torch.mean(array_effort(f, bz_rirs))
 
-        print(f"model acc {acc}, base line acc {acc_bl}")
+                metrics_results_dict[metric].append(result)
+
+            # for metric, result in zip(metrics_results_dict.keys(), metrics_results_dict.values()):
+            #     print(f"{metric}: {10 * np.log10(result[-1])}")
+            #

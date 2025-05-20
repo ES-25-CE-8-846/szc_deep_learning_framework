@@ -116,15 +116,17 @@ if __name__ == "__main__":
         config = yaml.safe_load(f)
 
     training_config = config["training_run"]
+    testing_config = config["testing_run"]
 
     # === Get components from config ===
     model_class = get_class_or_func(training_config["model"])
 
     sound_dataset_path = training_config["sound_dataset_path"]
-    sound_dataset_path = "./testing_data/audio_raw/"
-    rir_dataset_path = training_config["rir_dataset_path"]
-    rir_dataset_path = "./testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/test/"
+    sound_dataset_path = "/home/a/datasets/audio/LibriSpeech"
+    rir_dataset_path = testing_config["rir_dataset_path"]
+    rir_dataset_path = "/home/a/datasets/audio/rirs/dataset/shoebox/run2/test/"
     batch_size = training_config["batch_size"]
+    batch_size = 1
     filter_length = training_config["filter_length"]
     inner_loop_iterations = training_config["inner_loop_iterations"]
     save_path = training_config["savepath"]
@@ -147,12 +149,12 @@ if __name__ == "__main__":
         sound_dataset_root=sound_dataset_path,
         rir_dataset_root=rir_dataset_path,
         sound_snip_len=sound_snip_len,
-        limit_used_soundclips=42,
+        limit_used_soundclips=100,
         override_existing=True,  # Add this if needed
     )
 
     torch_dataloader = torch.utils.data.DataLoader(
-        dataset=dataset, batch_size=1, shuffle=True
+        dataset=dataset, batch_size=1, shuffle=False
     )
 
     # === Instantiate Model ===
@@ -162,7 +164,7 @@ if __name__ == "__main__":
     )
 
     model_state_dict_fn = os.listdir(os.path.join(save_path, "checkpoints"))[
-        0
+        -1
     ]  # make this user selectebel later
     state_dict_path = os.path.join(save_path, "checkpoints", model_state_dict_fn)
 

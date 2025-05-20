@@ -1,3 +1,4 @@
 **/__pycache__/
 exp/
 wandb/
+testing_data/signal_distortion_soundfiles/

@@ -24,6 +24,7 @@ class Trainer:
         loss_function,
         rank,
         world_size,
+        loss_weights = None,
         validation_dataloader = None,
         optimizer=torch.optim.AdamW,
         filter_length=2048,
@@ -37,6 +38,7 @@ class Trainer:
         self.dataloader = dataloader
         self.validation_dataloader = validation_dataloader
         self.loss_function = loss_function
+        self.loss_weights = loss_weights
         self.filter_length = filter_length
         self.device = rank
         self.rank = rank
@@ -215,7 +217,7 @@ class Trainer:
                 "data_dict": data_dict,
             }
 
-            loss_dict = self.loss_function(data_for_loss_dict, device=self.device)
+            loss_dict = self.loss_function(data_for_loss_dict, weights = self.loss_weights, device=self.device)
             loss = loss_dict["loss"]
 
             if self.enable_debug_plotting:
@@ -412,6 +414,8 @@ class Trainer:
                 self.wandb_logger(loss_dict, "training")
 
         # validation step
+        if self.rank == 0:
+            print("initiating validation")
 
         if self.validation_dataloader is not None:
             self.ddp_model.eval()

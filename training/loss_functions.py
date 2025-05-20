@@ -5,6 +5,21 @@ import scipy.signal
 import numpy as np
 
 
+def _normalize(tensor, dim=-1, eps=1e-8):
+    """
+    Normalize a tensor along the specified dimension to have max absolute value of 1.
+
+    Args:
+        tensor (torch.Tensor): Input tensor.
+        dim (int): Dimension along which to normalize (default: last).
+        eps (float): Small constant to avoid division by zero.
+
+    Returns:
+        torch.Tensor: Normalized tensor.
+    """
+    max_val = torch.amax(torch.abs(tensor), dim=dim, keepdim=True)
+    return tensor / (max_val + eps)
+
 def sound_loss(loss_data_dict, weights=None, device=None):
     """
     Spectral loss function that compares the FFT magnitude of the input and target sound.
@@ -242,8 +257,8 @@ def signal_distortion_loss(loss_data_dict, weights=None, device=None):
     actual = torch.fft.irfft(actual_fft, n=conv_len, dim=-1)
 
     # Truncate to original dry sound length
-    desired = desired[..., :dry_len]
-    actual = actual[..., :dry_len]
+    desired = _normalize(desired[..., :dry_len])
+    actual = _normalize(actual[..., :dry_len])
 
     # L2 loss between desired and actual sound
     signal_distortion = torch.mean((desired - actual)**2)#/torch.mean(desired**2)
@@ -252,12 +267,12 @@ def signal_distortion_loss(loss_data_dict, weights=None, device=None):
 
 
 
-def sd_acc_loss(loss_data_dict, weights=[100,1], device=None):
+def sd_acc_loss(loss_data_dict, weights=[10,1], device=None):
     """Function to compute loss based on the acoustic contrast and signal distortion"""
+    if weights is None:
+        weights = [1, 1]
 
     return {'loss': acc_loss(loss_data_dict)['loss']*weights[0] + signal_distortion_loss(loss_data_dict)['loss']*weights[1]}
-
-
 
 
 

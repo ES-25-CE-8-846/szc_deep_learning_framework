@@ -1,5 +1,4 @@
 - finish evaluation metrics
 - finish sann loss
-- fix model interaction to work with 4 mic bright zone
 - make good loss
 

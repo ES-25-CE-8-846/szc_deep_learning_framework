@@ -49,24 +49,6 @@ class ModelInteraction:
 
         mic_output = torch.zeros((B, M, output_len), device=sound.device)
 
-        # for b in range(B):
-        #     for n in range(N):
-        #         speaker = sound[b, n].view(1, 1, -1)  # [1, 1, K]
-        #         for m in range(M):
-        #             rir = impulse_responses[b, m, n].flip(0).view(1, 1, -1)  # [1, 1, S]
-        #             convolved = F.conv1d(speaker, rir, padding=0).squeeze()  # [L]
-        #
-        #             # Pad or trim to match expected output length
-        #             if convolved.shape[0] < output_len:
-        #                 pad_len = output_len - convolved.shape[0]
-        #                 convolved = F.pad(convolved, (0, pad_len))
-        #             elif convolved.shape[0] > output_len:
-        #                 convolved = convolved[:output_len]
-        #
-        #             mic_output[b, m] += convolved
-
-
-
         sound = sound.detach().cpu()
         sound = sound[:,None,:,:]
         impulse_responses = impulse_responses.detach().cpu()
@@ -104,18 +86,6 @@ class ModelInteraction:
         output = torch.zeros(B, N, output_len, device=filters.device)
         sound = sound.to(filters.device)
 
-        # for b in range(B):
-        #     input_signal = sound[b].view(1, 1, -1)  # [1, 1, K]
-        #     for n in range(N):
-        #         filt = filters[b, n].flip(0).view(1, 1, -1)  # [1, 1, M]
-        #         conv = F.conv1d(input_signal, filt, padding=0).squeeze()  # [output_len]
-        #
-        #         # Pad if needed (for safety)
-        #         if conv.shape[0] < output_len:
-        #             conv = F.pad(conv, (0, output_len - conv.shape[0]))
-        #         output[b, n] = conv
-        #
-
         sound = sound.detach().cpu()
         sound = sound[:,:,:]
         filters = filters.detach().cpu()
@@ -140,12 +110,10 @@ class ModelInteraction:
                                     w: width
         """
 
-        # print(f"sp shape {output_sound.size()}")
-        # print(f"mc shape {mic_inputs.size()}")
 
         # cropping
         out_len = output_sound.size()[2]
-        mic_inputs = mic_inputs[:, :, 0:out_len]
+        mic_inputs = mic_inputs[:, 1:4, 0:out_len]
 
         if device is not None:
             mic_inputs = mic_inputs.to(self.device)

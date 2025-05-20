@@ -32,8 +32,10 @@ def train(rank, world_size, config):
     ddp_setup(rank, world_size)
     training_config = config["training_run"]
     loss_function = get_class_or_func(training_config["loss_function"])
+
     dataset = config["training_dataset"]
     validation_dataset = config["validation_dataset"]
+
     model = training_config["model"]
     filter_length = training_config["filter_length"]
     inner_loop_iterations = training_config["inner_loop_iterations"]
@@ -45,6 +47,7 @@ def train(rank, world_size, config):
     wandb_key_path = training_config["wandb_key_path"]
 
 
+    loss_weights = training_config['loss_weights']
 
     if log_to_wandb and rank == 0:
         with open(wandb_key_path, "r") as wandb_key_file:
@@ -71,14 +74,15 @@ def train(rank, world_size, config):
     validation_dataloader = torch.utils.data.DataLoader(
         dataset=validation_dataset,
         batch_size=batch_size,
-        num_workers=4,
-        sampler=DistributedSampler(dataset),
+        num_workers=1,
+        sampler=DistributedSampler(validation_dataset),
     )
 
     training_loop = trainer.Trainer(
         dataloader=torch_dataloader,
         validation_dataloader=validation_dataloader,
         loss_function=loss_function,
+        loss_weights=loss_weights,
         model=model,
         world_size=world_size,
         rank=rank,
@@ -112,6 +116,7 @@ if __name__ == "__main__":
     # === Get components from config ===
     model_class = get_class_or_func(training_config["model"])
     loss_function = get_class_or_func(training_config["loss_function"])
+    loss_weights = training_config['loss_weights']
 
     sound_dataset_path = training_config["sound_dataset_path"]
     rir_dataset_path = training_config["rir_dataset_path"]
@@ -130,6 +135,7 @@ if __name__ == "__main__":
 
     validation_rir_dataset_path = validation_config["rir_dataset_path"]
     validation_sound_dataset_path = validation_config["sound_dataset_path"]
+
 
     assert batch_size % n_gpus == 0
     os.environ["MASTER_ADDR"] = "localhost"
@@ -153,11 +159,11 @@ if __name__ == "__main__":
 
     validation_dataset = dataloader.DefaultDataset(
         sound_dataset_root=validation_sound_dataset_path,
-        rir_dataset_root=rir_dataset_path,
+        rir_dataset_root=validation_rir_dataset_path,
         sound_snip_len=sound_snip_len,
         sound_snip_save_path="/tmp/sound_snips/val/",
         limit_used_soundclips=limit_uses_sound_snips,
-        override_existing=False
+        override_existing=True,
     )
 
     config["validation_dataset"] = validation_dataset
