@@ -18,12 +18,15 @@ def get_class_or_func(path):
 
 
 class UserCommandDispatcher:
-    def __init__(self, bz_sounds, dz_sounds):
+    def __init__(self, bz_sounds, dz_sounds, model_interactor, savepath):
         """Function to handle user command"""
         self.should_continue = True
         self.sound = np.zeros(10)
         self.bz_sounds = bz_sounds
         self.dz_sounds = dz_sounds
+        self.model = model_interactor.model
+        self.savepath = savepath
+        self.posible_checkpoints = os.listdir(os.path.join(savepath, "checkpoints"))
         self.command_to_function_dict = {
             "p": self.play_sound,
             "save": self.save_sound,
@@ -31,6 +34,7 @@ class UserCommandDispatcher:
             "ss": self.sound_selector,
             "svs": self.save_sound,
             "nr": self.next_room,
+            "cs": self.checkpoint_selector,
             "help": self.helper,
         }
 
@@ -85,6 +89,28 @@ class UserCommandDispatcher:
         """Function to play sound"""
         print(self.sound)
         sd.play(self.sound)
+
+    def checkpoint_selector(self):
+        """Function to select checkpoint"""
+        print("available checkpoints")
+        for i, checkpoint in enumerate(self.posible_checkpoints):
+            print(f"{checkpoint}: {i}")
+
+        user_command = input("checkpoint: ")
+
+        checkpoint_to_use = self.posible_checkpoints[int(user_command)]
+        print(f"selected checkpoint: {checkpoint_to_use}")
+
+        checkpoint_path = os.path.join(self.savepath, "checkpoints", checkpoint_to_use)
+
+        if torch.cuda.is_available():
+            self.model.load_state_dict(torch.load(state_dict_path, weights_only=True))
+        else:
+            self.model.load_state_dict(
+                torch.load(
+                    state_dict_path, weights_only=True, map_location=torch.device("cpu")
+                )
+            )
 
     def save_sound(self):
         """Function to save sound"""
@@ -166,6 +192,7 @@ if __name__ == "__main__":
     model_state_dict_fn = os.listdir(os.path.join(save_path, "checkpoints"))[
         -1
     ]  # make this user selectebel later
+    print(model_state_dict_fn)
     state_dict_path = os.path.join(save_path, "checkpoints", model_state_dict_fn)
 
     if torch.cuda.is_available():
@@ -188,7 +215,9 @@ if __name__ == "__main__":
     testing_sound_tensor = torch.tensor(testing_sound).to(torch.float)
 
     for i, data_dict in enumerate(torch_dataloader):
-        evaluation_data = model_interacter.run_inner_feedback_testing(data_dict, 16)
+        evaluation_data = model_interacter.run_inner_feedback_testing(
+            data_dict, inner_loop_iterations
+        )
 
         filters = evaluation_data["filters_time"]
 
@@ -206,6 +235,8 @@ if __name__ == "__main__":
         dz_sound = dz_sound / sound_max_amp
 
         print(f"room {i}")
-        user_command_dispatcher = UserCommandDispatcher(bz_sound, dz_sound)
+        user_command_dispatcher = UserCommandDispatcher(
+            bz_sound, dz_sound, model_interacter, savepath=save_path
+        )
         user_command_dispatcher.user_interactor()
         print(bz_sound.size())

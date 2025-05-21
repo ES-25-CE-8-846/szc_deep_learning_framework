@@ -1,5 +1,6 @@
 from time import time
 from warnings import filters
+from numpy.core.fromnumeric import mean
 import torch
 from torch._C import device
 from torch.utils.checkpoint import checkpoint
@@ -184,8 +185,8 @@ class Trainer:
 
         n_speakers = bz_rirs.size()[2]
         batch_size = bz_rirs.size()[0]
-        old_filters = torch.ones((batch_size, n_speakers, self.filter_length))
-
+        old_filters = torch.zeros((batch_size, n_speakers, self.filter_length))
+        old_filters[...,0] = 1
         for iteration in range(n_iterations):
             filtered_sound = self.apply_filter(sound, old_filters)
             bz_microphone_input = self.auralizer(sound, bz_rirs)
@@ -225,15 +226,13 @@ class Trainer:
 
 
             loss.backward()
+            abs_mean_gradients = {}
+            for name, param in self.model.named_parameters():
+                if param.grad is not None:
+                    abs_mean_gradients[name] = torch.mean(torch.abs(param.grad)).item()
 
-            # for name, param in self.model.named_parameters():
-            #     if param.grad is not None:
-            #         print(f"{name} gradient shape: {param.grad.shape}")
-            #         print(param.grad)
-            #     else:
-            #         print(f"{name} has no gradient")
+            gradient_dict = self.compute_normalized_gradient_dict(abs_mean_gradients)
 
-            # print(f"loss: {loss}, inner loop iteration: {iteration}")
             self.optimizer.step()
             self.optimizer.zero_grad()
 
@@ -244,6 +243,9 @@ class Trainer:
             loss_dict['acc'] = acc
             if self.rank == 0:
                 print(f"loss: {loss.item()}, ac {acc}, inner loop iteration: {iteration}")
+                self.print_gradient_dict(gradient_dict)
+            if self.log_to_wandb:
+                self.wandb_logger(loss_dict, "training")
 
         return loss_dict
 
@@ -264,54 +266,55 @@ class Trainer:
 
         n_speakers = bz_rirs.size()[2]
         batch_size = bz_rirs.size()[0]
-        old_filters = torch.ones((batch_size, n_speakers, self.filter_length))
+        old_filters = torch.zeros((batch_size, n_speakers, self.filter_length))
+        old_filters[...,0] = 1
+        with torch.no_grad():
+            for iteration in range(n_iterations):
+                filtered_sound = self.apply_filter(sound, old_filters)
+                bz_microphone_input = self.auralizer(sound, bz_rirs)
 
-        for iteration in range(n_iterations):
-            filtered_sound = self.apply_filter(sound, old_filters)
-            bz_microphone_input = self.auralizer(sound, bz_rirs)
+                nn_input = self.format_to_model_input(filtered_sound, bz_microphone_input)
 
-            nn_input = self.format_to_model_input(filtered_sound, bz_microphone_input)
+                model_output = self.ddp_model.forward(nn_input)
 
-            model_output = self.ddp_model.forward(nn_input)
-
-            if self.model.output_filter_domain == "time":
-                filters_frq = torch.fft.rfft(model_output)
-                filters_time = model_output
-            elif self.model.output_filter_domain == "frequency":
-                filters_frq = model_output
-                filters_time = torch.fft.irfft(model_output)
-
-
-
-            filtered_sound = self.apply_filter(sound, filters_time)
-            bz_microphone_input = self.auralizer(filtered_sound, bz_rirs)
-            dz_microphone_input = self.auralizer(filtered_sound, dz_rirs)
-
-            data_for_loss_dict = {
-                "gt_sound": sound,
-                "f_sound": filtered_sound,
-                "bz_input": bz_microphone_input,
-                "dz_input": dz_microphone_input,
-                "filters_time": filters_time,
-                "filters_frq":filters_frq,
-                "data_dict": data_dict,
-            }
-
-            loss_dict = self.loss_function(data_for_loss_dict, device=self.device)
-            loss = loss_dict["loss"]
-
-            if self.enable_debug_plotting:
-                self.debug_plotting(data_dict, data_for_loss_dict, loss_dict)
-
-            if self.rank == 0:
-                print(f"loss: {loss.item()}, inner loop iteration: {iteration}")
+                if self.model.output_filter_domain == "time":
+                    filters_frq = torch.fft.rfft(model_output)
+                    filters_time = model_output
+                elif self.model.output_filter_domain == "frequency":
+                    filters_frq = model_output
+                    filters_time = torch.fft.irfft(model_output)
 
 
-            old_filters = filters_time.detach()
 
-            # compute acoustic contrast for logging
-            acc = acc_evaluation(filters_time.detach().cpu(), bz_rirs.cpu(), dz_rirs.cpu())
-            loss_dict['acc'] = acc
+                filtered_sound = self.apply_filter(sound, filters_time)
+                bz_microphone_input = self.auralizer(filtered_sound, bz_rirs)
+                dz_microphone_input = self.auralizer(filtered_sound, dz_rirs)
+
+                data_for_loss_dict = {
+                    "gt_sound": sound,
+                    "f_sound": filtered_sound,
+                    "bz_input": bz_microphone_input,
+                    "dz_input": dz_microphone_input,
+                    "filters_time": filters_time,
+                    "filters_frq":filters_frq,
+                    "data_dict": data_dict,
+                }
+
+                loss_dict = self.loss_function(data_for_loss_dict, weights = self.loss_weights, device=self.device)
+                loss = loss_dict["loss"]
+
+                if self.enable_debug_plotting:
+                    self.debug_plotting(data_dict, data_for_loss_dict, loss_dict)
+
+                if self.rank == 0:
+                    print(f"loss: {loss.item()}, inner loop iteration: {iteration}")
+
+
+                old_filters = filters_time.detach()
+
+                # compute acoustic contrast for logging
+                acc = acc_evaluation(filters_time.detach().cpu(), bz_rirs.cpu(), dz_rirs.cpu())
+                loss_dict['acc'] = acc
 
         return loss_dict
     def save_checkpoint(self, current_ep, last_loss):
@@ -337,6 +340,20 @@ class Trainer:
     def wandb_logger(self, loss_dict, namespace):
         wandb.log(data={f"{namespace}_loss":loss_dict['loss'].item(),
                         f"{namespace}_acc":loss_dict['acc']})
+
+    def compute_normalized_gradient_dict(self, gradient_dict:dict):
+        max_gradient = max(gradient_dict.values())
+
+        normalized_gradient_dict = {}
+
+        for key, value in zip(gradient_dict.keys(), gradient_dict.values()):
+            normalized_gradient_dict[key] = value/max_gradient
+
+        return normalized_gradient_dict
+
+    def print_gradient_dict(self, gradient_dict):
+        for key, value in zip(gradient_dict.keys(), gradient_dict.values()):
+            print(f"{key}: {value}")
 
     def debug_plotting(self, data_dict, data_for_loss_dict, loss_dict):
         """
@@ -410,15 +427,17 @@ class Trainer:
                 print(f"epoch {self.current_ep}: {percent_done:.2f}% complete")
                 print(f"time taken {time()-time_begin}")
 
-            if self.log_to_wandb:
-                self.wandb_logger(loss_dict, "training")
 
         # validation step
         if self.rank == 0:
             print("initiating validation")
 
+        total_val_batches = len(self.validation_dataloader)
+
         if self.validation_dataloader is not None:
             self.ddp_model.eval()
+            summed_loss_dict = {'loss':0.0, 'acc':0.0}
+            n_losses = 0
             for i, data_dict in enumerate(self.validation_dataloader):
                 # Ensure all data is passed to the correct device
                 if self.device is not None:
@@ -428,14 +447,24 @@ class Trainer:
 
                 with torch.no_grad():
                     loss_dict = self.run_inner_feedback_validation(data_dict, self.inner_loop_iterations)
+                    for key in loss_dict.keys():
+                        summed_loss_dict[key] += loss_dict[key]
+                        n_losses += 1
 
                 if self.rank == 0:
-                    percent_done = (i + 1) / total_batches * 100
+                    percent_done = (i + 1) / total_val_batches * 100
                     print(f"epoch {self.current_ep}: {percent_done:.2f}% complete")
 
                 # this is more of a temporary logging, the evaluation metrics sohuld be logged as well
-                if self.log_to_wandb:
-                    self.wandb_logger(loss_dict, "validation")
+
+            for key in loss_dict.keys():
+                loss_dict[key] = summed_loss_dict[key] / n_losses
+
+            if self.rank == 0:
+                print(f"mean loss: {loss_dict}")
+
+            if self.log_to_wandb:
+                self.wandb_logger(loss_dict, "validation")
 
 
 

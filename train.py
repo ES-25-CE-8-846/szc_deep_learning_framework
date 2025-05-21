@@ -73,7 +73,7 @@ def train(rank, world_size, config):
 
     validation_dataloader = torch.utils.data.DataLoader(
         dataset=validation_dataset,
-        batch_size=batch_size,
+        batch_size=world_size,
         num_workers=1,
         sampler=DistributedSampler(validation_dataset),
     )
@@ -139,7 +139,7 @@ if __name__ == "__main__":
 
     assert batch_size % n_gpus == 0
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "22355"  # use a free port
+    os.environ["MASTER_PORT"] = "22356"  # use a free port
 
     os.makedirs(save_path, exist_ok=True)
     shutil.copy(args.config_path, os.path.join(save_path, "config.yaml"))

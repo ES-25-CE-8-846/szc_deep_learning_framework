@@ -238,13 +238,15 @@ def signal_distortion_loss(loss_data_dict, weights=None, device=None):
     L2 loss between the desired output (dry sound convolved with RIRs)
     and the actual CNN-produced bright zone input signal.
     """
-    # dry_sound = loss_data_dict["gt_sound"]  # (B, S, T)
+    dry_sound = loss_data_dict["gt_sound"]  # (B, S, T)
     bz_rirs = loss_data_dict["data_dict"]["bz_rirs"]  # (B, M, S, L)
 
     B, M, S, L = bz_rirs.shape
 
-    dry_sound = sd_reference
-    dry_sound = torch.ones((B, S, dry_sound.size()[-1])) * dry_sound
+    # dry_sound = sd_reference
+    # dry_sound = torch.ones((B, S, dry_sound.size()[-1])) * dry_sound
+
+    dry_sound = dry_sound.to(bz_rirs.device)
 
     bz_rirs = loss_data_dict["data_dict"]["bz_rirs"]  # (B, M, S, L)
     filters = loss_data_dict["filters_time"]  # (B, S, K)

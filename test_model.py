@@ -13,6 +13,8 @@ from evaluation.acoustic_contrast import acc_evaluation
 from evaluation.distortion import normalized_signal_distortion
 from evaluation.array_effort import array_effort
 from tqdm import tqdm
+import pandas as pd
+import matplotlib.pyplot as plt
 
 
 def get_class_or_func(path):
@@ -34,6 +36,26 @@ def load_signal_distortion_test_sound():
     return concatenated_sound, sr
 
 
+def plot_filters(ax, filters, name, sample_rate=48000):
+    """
+    Plots the magnitude of the filter frequency responses.
+
+    Args:
+        ax: Matplotlib Axes object
+        filters: Tensor of shape (B, S, K) — filters per speaker
+        name: Title for the subplot
+        sample_rate: Sample rate of the system (for frequency axis scaling)
+    """
+    filter_len = filters.shape[-1]
+    freqs = torch.fft.rfftfreq(filter_len, d=1/sample_rate)
+
+    for fi in range(min(3, filters.shape[1])):  # Plot up to 3 speakers
+        mag = torch.abs(torch.fft.rfft(filters[0, fi, :]))
+        ax.plot(freqs, mag)
+
+    ax.set_title(name)
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("Magnitude")
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("exp_path")
@@ -48,6 +70,7 @@ if __name__ == "__main__":
     sd_test_sound = np.zeros(10)
     testing_metrics = testing_config["metrics"]
     baseline_filters = testing_config["baseline_filters"]
+    testing_rirs = testing_config["rir_dataset_path"]
     print(f"testing metrics {testing_metrics}")
 
     metrics_results_dict = {}
@@ -79,11 +102,11 @@ if __name__ == "__main__":
     print(testing_sound)
 
     ### load rirs ###
-    test_rirs_path = rir_dataset_path.replace("train", "test")
+    # test_rirs_path = rir_dataset_path.replace("train", "test")
 
     dataset = dataloader.DefaultDataset(
         sound_dataset_root=sound_dataset_path,
-        rir_dataset_root=test_rirs_path,
+        rir_dataset_root=testing_rirs,
         sound_snip_len=sound_snip_len,
         limit_used_soundclips=42,
         override_existing=True,  # Add this if needed
@@ -105,6 +128,7 @@ if __name__ == "__main__":
     ]  # make this user selectebel later
     state_dict_path = os.path.join(save_path, "checkpoints", model_state_dict_fn)
 
+    print(model_state_dict_fn)
     if torch.cuda.is_available():
         model.load_state_dict(torch.load(state_dict_path, weights_only=True))
     else:
@@ -131,9 +155,15 @@ if __name__ == "__main__":
         filter_result_dict[filter_name] = {}
         for metric in testing_metrics:
             filter_result_dict[filter_name][metric] = []
+    n_tests = 0
 
+    fig, ax = plt.subplots(6, 1)
     for i, data_dict in tqdm(enumerate(torch_dataloader)):
-        evaluation_data = model_interacter.run_inner_feedback_testing(data_dict, 16)
+
+        n_tests += 1
+        evaluation_data = model_interacter.run_inner_feedback_testing(
+            data_dict, inner_loop_iterations
+        )
 
         filters = evaluation_data["filters_time"]
         precomp_filters = evaluation_data["data_dict"]["precomp_filters"]
@@ -145,7 +175,9 @@ if __name__ == "__main__":
 
         filters_to_test["model"] = filters
 
-        for filter_name in baseline_filters:
+        plot_filters(ax[0], filters, "model")
+
+        for n, filter_name in enumerate(baseline_filters):
             if filter_name == "dirac":
                 filters_to_test[filter_name] = dirac_filters
             elif filter_name == "vast":
@@ -154,6 +186,10 @@ if __name__ == "__main__":
                 filters_to_test[filter_name] = precomp_filters["q_acc"]
             elif filter_name == "pm":
                 filters_to_test[filter_name] = precomp_filters["q_pm"]
+
+
+
+            plot_filters(ax[n+1], filters_to_test[filter_name], filter_name)
 
         for filter_name, f in zip(filters_to_test.keys(), filters_to_test.values()):
 
@@ -170,21 +206,35 @@ if __name__ == "__main__":
             bz_sound = bz_sound / sound_max_amp
             dz_sound = dz_sound / sound_max_amp
             filter_results = {}
-            # print(filter_name)
+            print(f"--{filter_name}--")
             for metric in testing_metrics:
                 if metric == "sd":
                     result = normalized_signal_distortion(
                         testing_sound, f, bz_rirs, bz_sound
                     )
-                    # print(f"sd {result}")
-                elif metric == "acc":
+                    print(f"sd {result}")
+                elif metric == "ac":
                     result = acc_evaluation(f, bz_rirs, dz_rirs)
-                    # print(f"acc {result}")
+                    print(f"ac {result}")
                 elif metric == "ae":
-                    result = torch.mean(array_effort(f, bz_rirs))
+                    result = torch.mean(10 * torch.log10((array_effort(torch.fft.rfft(f), bz_rirs))))
+                    print(f"ae {result}")
 
                 filter_result_dict[filter_name][metric].append(result)
+        if i > 100:
+            plt.show()
+            break
 
-            # for metric, result in zip(metrics_results_dict.keys(), metrics_results_dict.values()):
-            #     print(f"{metric}: {10 * np.log10(result[-1])}")
-            #
+    for filter_name in filters_to_test.keys():
+        for metric in testing_metrics:
+            filter_result_dict[filter_name][metric] = np.mean(
+                filter_result_dict[filter_name][metric]
+            )
+
+    # Convert to DataFrame
+    df = pd.DataFrame.from_dict(filter_result_dict, orient="index")
+
+    # Save to CSV
+    df.to_csv(os.path.join(save_path, "filter_results.csv"))
+
+    print(df)

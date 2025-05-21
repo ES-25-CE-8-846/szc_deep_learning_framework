@@ -36,9 +36,9 @@ def normalized_signal_distortion(evaluation_sound, filters, rirs, auralized_soun
     desired_sound = desired_sound[..., :dry_len]
     actual_sound = np.asarray(actual_sound[..., :dry_len])
 
-    plt.plot(desired_sound[0,0,:], range(dry_len))
-    plt.plot(actual_sound[0,0,:], range(dry_len))
-    plt.show()
+    # plt.plot(desired_sound[0,0,:], range(dry_len))
+    # plt.plot(actual_sound[0,0,:], range(dry_len))
+    # plt.show()
 
     # signal_distortion = np.mean((desired_sound - actual_sound)**2)/np.mean(desired_sound**2)
 

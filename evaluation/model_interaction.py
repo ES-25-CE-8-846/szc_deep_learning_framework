@@ -143,8 +143,8 @@ class ModelInteraction:
 
         n_speakers = bz_rirs.size()[2]
         batch_size = bz_rirs.size()[0]
-        old_filters = torch.ones((batch_size, n_speakers, self.filter_length))
-
+        old_filters = torch.zeros((batch_size, n_speakers, self.filter_length))
+        old_filters[...,0] = 1
         with torch.no_grad():
             for iteration in range(n_iterations):
                 filtered_sound = self.apply_filter(sound, old_filters)
