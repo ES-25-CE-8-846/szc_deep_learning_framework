@@ -1,3 +1,4 @@
-- make gpu adudio convolver 
-- apply filter to audio 
+- finish evaluation metrics
+- finish sann loss
+- make good loss
 

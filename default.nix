@@ -63,5 +63,6 @@ in
         torchinfo
         soundfile
         wandb
+        pandas
       ]);
   }

@@ -1,5 +1,5 @@
 from ctypes.util import test
-from cffi.api import model
+from warnings import filters
 from torch._subclasses.fake_tensor import torch_decomp_decompositions
 from torch.nn.modules import loss
 from training import dataloader
@@ -13,6 +13,23 @@ import numpy as np
 import models
 import soundfile
 import torchinfo
+import os
+
+from torch.utils.data.distributed import DistributedSampler
+from torch.distributed import init_process_group, destroy_process_group
+
+os.environ["MASTER_ADDR"] = "localhost"
+os.environ["MASTER_PORT"] = "22355"  # use a free port
+
+
+def ddp_setup(rank: int, world_size: int):
+    """
+    Args:
+        rank: Unique identifier of each process
+       world_size: Total number of processes
+    """
+    torch.cuda.set_device(rank)
+    init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
 
 class TestDataloading(unittest.TestCase):
@@ -34,6 +51,34 @@ class TestDataloading(unittest.TestCase):
         self.assertIn("dz_rirs", data_dict.keys())
         self.assertIn("bz_rirs", data_dict.keys())
         self.assertIn("sr", data_dict.keys())
+
+        self.assertTrue(
+            self.test_dataloader[0]["sound"].size()[1]
+            == self.test_dataloader[0]["sr"] * (sound_snips_len_ms / 1000)
+        )
+
+    def test_filter_loading(self):
+
+        sound_snips_len_ms = 1000
+
+        self.test_dataloader = dataloader.DefaultDataset(
+            sound_dataset_root="/home/ai/datasets/audio/LibriSpeech/train-clean-100/19/",
+            rir_dataset_root="/home/ai/datasets/audio/dataset/shoebox/run2/test/",
+            sound_snip_len=sound_snips_len_ms,
+            override_existing=True,
+            load_pre_computed_filters=True,
+        )
+
+        self.assertTrue(self.test_dataloader.__len__() > 0)
+        data_dict = self.test_dataloader[0]
+
+        self.assertIn("sound", data_dict.keys())
+        self.assertIn("dz_rirs", data_dict.keys())
+        self.assertIn("bz_rirs", data_dict.keys())
+        self.assertIn("sr", data_dict.keys())
+        self.assertIn("precomp_filters", data_dict.keys())
+
+        print(data_dict["precomp_filters"])
 
         self.assertTrue(
             self.test_dataloader[0]["sound"].size()[1]
@@ -72,15 +117,20 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
-        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
+        model = models.filter_estimator.FilterEstimatorModel(
+            input_channels=2, output_shape=(3, 100)
+        )
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
         )
 
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=model
+            dataloader=torch_dataloader,
+            loss_function=None,
+            model=model,
+            rank=None,
+            world_size=1,
         )
-
 
     def test_filter_apply(self):
 
@@ -92,12 +142,18 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
-        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
+        model = models.filter_estimator.FilterEstimatorModel(
+            input_channels=2, output_shape=(3, 100)
+        )
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
         )
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=model
+            dataloader=torch_dataloader,
+            loss_function=None,
+            model=model,
+            rank=None,
+            world_size=1,
         )
 
         for i, data_dict in enumerate(torch_dataloader):
@@ -123,13 +179,19 @@ class TestDataloading(unittest.TestCase):
             override_existing=True,
         )
 
-        model = models.filter_estimator.FilterEstimatorModel(input_channels=2, output_shape=(3,100))
+        model = models.filter_estimator.FilterEstimatorModel(
+            input_channels=2, output_shape=(3, 100)
+        )
 
         torch_dataloader = torch.utils.data.DataLoader(
             dataset=self.test_dataloader, batch_size=16
         )
         test_trainer = trainer.Trainer(
-            dataloader=torch_dataloader, loss_function=None, model=model
+            dataloader=torch_dataloader,
+            loss_function=None,
+            model=model,
+            rank=None,
+            world_size=1,
         )
 
         for i, data_dict in enumerate(torch_dataloader):
@@ -234,19 +296,22 @@ class TestTrainer(unittest.TestCase):
 
         print(device)
 
+        ddp_setup(0, 1)
         sound_snips_len_ms = 500
         self.test_dataloader = dataloader.DefaultDataset(
             sound_dataset_root="./testing_data/audio_raw/",
             rir_dataset_root="./testing_data/rirs/test_rirs/dataset/shoebox/alfredo-request/test/",
             sound_snip_len=sound_snips_len_ms,
             override_existing=True,
-            limit_used_soundclips=32
+            limit_used_soundclips=32,
         )
 
         torch_dataloader = torch.utils.data.DataLoader(
-            dataset=self.test_dataloader, batch_size=32
+            dataset=self.test_dataloader,
+            batch_size=32,
+            sampler=DistributedSampler(self.test_dataloader),
         )
-        test_model = models.filter_estimator.FilterEstimatorModel(
+        test_model = models.modified_sann.AudioFilterEstimatorFreq(
             input_channels=2, output_shape=(3, 4096)
         )
 
@@ -254,15 +319,16 @@ class TestTrainer(unittest.TestCase):
             dataloader=torch_dataloader,
             loss_function=loss_functions.sann_loss,
             model=test_model,
-            device=device,
             filter_length=4096,
             inner_loop_iterations=16,
-            save_path='./exp/test_run/',
-            checkpointing_mode='all',
+            save_path="./exp/test_run/",
+            checkpointing_mode="all",
             enable_debug_plotting=True,
+            rank=0,
+            world_size=1,
         )
 
-        test_trainer.run_epoch()
+        test_trainer.run_epoch(0)
 
 
 class TestLoss(unittest.TestCase):
@@ -284,21 +350,48 @@ class TestLoss(unittest.TestCase):
 
     def test_sann_loss(self):
 
-        bz_rirs = torch.rand(16,3,3,4096)
-        dz_rirs = torch.rand(16,3,12,4096)
-        complex_filters = torch.rand(16,3,2049)
+        bz_rirs = torch.rand(16, 3, 3, 4096)
+        dz_rirs = torch.rand(16, 3, 12, 4096)
+        complex_filters = torch.rand(16, 3, 2049)
 
-        data_dict = {'bz_rirs':bz_rirs,
-                     'dz_rirs':dz_rirs}
+        data_dict = {"bz_rirs": bz_rirs, "dz_rirs": dz_rirs}
 
-        loss_data_dict = {'complex_filters':complex_filters,
-                          'data_dict':data_dict}
+        loss_data_dict = {"filters_frq": complex_filters, "data_dict": data_dict}
 
         loss = loss_functions.sann_loss(loss_data_dict)
 
         print(f"loss {loss}")
 
+    def test_acc_loss(self):
 
+        from evaluation.acoustic_contrast import bdr_evaluation, acc_evaluation
+
+        filters = torch.rand((16, 3, 4096))
+        bz_rirs = torch.rand((16, 4, 3, 4096))
+        dz_rirs = torch.rand((16, 12, 3, 4096)) * 0.3
+
+        # bdr = bdr_evaluation(filters, bz_rirs, dz_rirs)
+
+        acc = acc_evaluation(filters, bz_rirs, dz_rirs)
+
+        data_dict = {"bz_rirs": bz_rirs, "dz_rirs": dz_rirs}
+
+        loss_data_dict = {"filters_time": filters, "data_dict": data_dict}
+
+        acc_from_loss = loss_functions.acc_loss(loss_data_dict)
+
+        print(f"eval acc {acc}, loss acc {acc_from_loss}")
+
+    def test_sd_loss(self):
+        bz_rirs = torch.rand(16, 3, 3, 4096)
+        dz_rirs = torch.rand(16, 3, 12, 4096)
+        complex_filters = torch.rand(16, 3, 2049)
+
+        data_dict = {"bz_rirs": bz_rirs, "dz_rirs": dz_rirs}
+
+        loss_data_dict = {"filters_time": complex_filters, "data_dict": data_dict}
+
+        loss_functions.signal_distortion_loss(loss_data_dict)
 
 
 class TestModels(unittest.TestCase):
@@ -309,6 +402,30 @@ class TestModels(unittest.TestCase):
 
         torchinfo.summary(test_model)
 
+
+class TestEvaluations(unittest.TestCase):
+    def test_acousic_contrast(self):
+        from evaluation.acoustic_contrast import bdr_evaluation, acc_evaluation
+
+        filters = torch.rand((16, 3, 4096))
+        bz_rirs = torch.rand((16, 4, 3, 4096))
+        dz_rirs = torch.rand((16, 12, 3, 4096)) * 0.5
+
+        # bdr = bdr_evaluation(filters, bz_rirs, dz_rirs)
+
+        acc = acc_evaluation(filters, bz_rirs, dz_rirs)
+        print(acc)
+
+    def test_array_effort(self):
+        from evaluation.array_effort import array_effort
+
+        filters = torch.rand((16, 3, 4096))
+        bz_rirs = torch.rand((16, 4, 3, 4096))
+        dz_rirs = torch.rand((16, 12, 3, 4096)) * 0.5
+
+        ae = array_effort(filters, bz_rirs)
+
+        print(ae.size())
 
 
 if __name__ == "__main__":

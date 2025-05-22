@@ -1,3 +1,4 @@
+from re import split
 from typing_extensions import override
 import torch
 import torchaudio
@@ -21,7 +22,9 @@ class DefaultDataset(Dataset):
                  rir_fixed_length = 4096,
                  override_existing = False,
                  filter_by_std = None,
-                 filter_by_mean = None):
+                 filter_by_mean = None,
+                 load_pre_computed_filters = False,
+                 filter_dirname = "filters_4096_1.0_1e-05"):
 
         self.sound_dataroot = sound_dataset_root
         self.rir_dataroot = rir_dataset_root
@@ -36,6 +39,9 @@ class DefaultDataset(Dataset):
 
         self.filter_by_std = filter_by_std
         self.filter_by_mean = filter_by_mean
+
+        self.load_pre_computed_filters = load_pre_computed_filters
+        self.filter_dirname = filter_dirname
 
         if override_existing:
             shutil.rmtree(sound_snip_save_path)
@@ -72,6 +78,9 @@ class DefaultDataset(Dataset):
                     else:
                         removed_snip_counter += 1
 
+                if limit_used_soundclips and snip_counter > limit_used_soundclips:
+                    break
+
             print(snip_counter, removed_snip_counter)
             self.n_sound_snips = snip_counter
         else:
@@ -81,17 +90,30 @@ class DefaultDataset(Dataset):
         ### something rir
         self.rir_files = []
         for root, directory, files in os.walk(self.rir_dataroot):
-            for file in files:
-                file_path = os.path.join(root, file)
-                file_extension = file.split(".")[-1]
-                if file_extension == "npz":
-                    self.rir_files.append(file_path)
+            # print(directory)
+            if directory != self.filter_dirname:
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    file_extension = file.split(".")[-1]
+                    file_dir = root.split('/')[-1]
+                    if file_extension == "npz" and file_dir != self.filter_dirname:
+                        self.rir_files.append(file_path)
+                        # print(file_path)
+
+
+
+
+
 
         self.n_rirs = len(self.rir_files)
 
         if limit_used_soundclips:
             if limit_used_soundclips < self.n_sound_snips:
                 self.n_sound_snips = limit_used_soundclips
+
+        self.sound_clip_inicies = np.arange(self.n_sound_snips)
+
+        print(f"n rirs {self.n_rirs}")
 
     def filter_snippets(self, filter_by_std, filter_by_mean, sound_tensor):
         std = torch.std(sound_tensor)
@@ -114,16 +136,16 @@ class DefaultDataset(Dataset):
         return is_good
 
 
+
     def __len__(self):
-        return self.n_rirs * self.n_sound_snips
+        return self.n_rirs -1
 
 
     def __getitem__(self, index):
 
-        grid_index = np.unravel_index(index, (self.n_rirs, self.n_sound_snips))
 
-        rir_index = grid_index[0]
-        sound_index = grid_index[1]
+        rir_index = index
+        sound_index = np.random.choice(self.n_sound_snips)
 
         sound_fp = os.path.join(self.sound_snip_save_path, f'{sound_index}'.rjust(10,'0') + '.wav')
         sound, sr = torchaudio.load(sound_fp)
@@ -133,6 +155,14 @@ class DefaultDataset(Dataset):
 
         # get impulse responses
         rirs = np.load(self.rir_files[rir_index])
+
+        # get filters
+        if self.load_pre_computed_filters:
+            split_path = self.rir_files[index].split('/')
+            split_path.insert(-1, self.filter_dirname)
+            filter_path = "/" + os.path.join(*split_path)
+            filters = np.load(filter_path)
+
 
         bz_rirs = rirs["bz_rir"]
         dz_rirs = rirs["dz_rir"]
@@ -164,5 +194,8 @@ class DefaultDataset(Dataset):
             data_dict = {'sound':sound, 'bz_rirs':bz_rirs_ext, 'dz_rirs':dz_rirs_ext, 'sr':sr}
         else:
             data_dict = {'sound':sound, 'bz_rirs':bz_rirs, 'dz_rirs':dz_rirs, 'sr':sr}
+
+        if self.load_pre_computed_filters:
+            data_dict['precomp_filters'] = filters
 
         return data_dict
