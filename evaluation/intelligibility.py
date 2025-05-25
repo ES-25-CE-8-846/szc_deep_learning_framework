@@ -1,267 +1,229 @@
 import torch
+from pathlib import Path
 import torchaudio
 import matplotlib.pyplot as plt
-from pesq import pesq
-from pystoi import stoi
+# from pesq import pesq
+# from pystoi import stoi
 from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
 import torchaudio.functional as F
 import numpy as np
+from scipy.signal import fftconvolve
+import soundfile as sf
+
+from intelligibility_tools import evaluate_signals
 
 
-def evaluate_stoi_pesq(signal, dry_signal, sample_rate=16000):
+def extract_combined_filters(filters_path: Path):
     """
-    Evaluates the STOI and PESQ metrics for the given signal against the dry signal.
-
-    Input:
-    signal: The signal to evaluate
-    dry_signal: The dry reference signal
-    sample_rate: The sample rate of the signals
-
+    Extracts filters from a .npz file and returns them as a dictionary.
+    Args:
+        filters_path (Path): Path to the .npz file containing the filters.
     Returns:
-    stoi: The STOI score
-    pesq: The PESQ score
+        q_acc: Array of filters for acoustic contrast control.
+        q_vast: Array of filters for vast.
+        q_pm: Array of filters for pressure matching.
     """
-    # Convert to numpy and flatten to 1D
-    if isinstance(signal, torch.Tensor):
-        signal = signal.squeeze().numpy()
-    if isinstance(dry_signal, torch.Tensor):
-        dry_signal = dry_signal.squeeze().numpy()
-
-    # Make sure they're 1D
-    signal = signal.flatten()
-    dry_signal = dry_signal.flatten()
-
-    # Calculate STOI and PESQ
-    stoi_score = stoi(dry_signal, signal, fs_sig=sample_rate)
-    pesq_score = pesq(sample_rate, dry_signal, signal)
-
-    return stoi_score, pesq_score
-
-def evaluate_mos(signal, dry_signal):
-    """
-    Evaluates the MOS score for the given signal against the dry signal.
-
-    Input:
-    signal: The signal to evaluate
-    dry_signal: The dry reference signal
-
-    Returns:
-    mos: The MOS score
-    """
-    # Convert to numpy and flatten to 1D
-    if isinstance(signal, torch.Tensor):
-        signal = signal.squeeze().numpy()
-    if isinstance(dry_signal, torch.Tensor):
-        dry_signal = dry_signal.squeeze().numpy()
-
-    # Make sure they're 1D
-    signal = signal.flatten()
-    dry_signal = dry_signal.flatten()
-
-    subjective_model = SQUIM_SUBJECTIVE.get_model()
-    mos_score = subjective_model(signal, dry_signal)
-
-    return mos_score
-
-def evaluate_stoi(signal, dry_signal, sample_rate=16000):
-    """
-    Evaluates the STOI score for the given signal against the dry signal.
-
-    Input:
-    signal: The signal to evaluate
-    dry_signal: The dry reference signal
-    sample_rate: The sample rate of the signals
-
-    Returns:
-    stoi: The STOI score
-    """
-    # Convert to numpy and flatten to 1D
-    if isinstance(signal, torch.Tensor):
-        signal = signal.squeeze().numpy()
-    if isinstance(dry_signal, torch.Tensor):
-        dry_signal = dry_signal.squeeze().numpy()
-
-    # Make sure they're 1D
-    signal = signal.flatten()
-    dry_signal = dry_signal.flatten()
-
-    # Calculate STOI
-    stoi_score = stoi(dry_signal, signal, fs_sig=sample_rate)
-
-    return stoi_score
-
-def evaluate_pesq(signal, dry_signal, sample_rate=16000):
-    """
-    Evaluates the PESQ score for the given signal against the dry signal.
-
-    Input:
-    signal: The signal to evaluate
-    dry_signal: The dry reference signal
-    sample_rate: The sample rate of the signals
-
-    Returns:
-    pesq: The PESQ score
-    """
-    # Convert to numpy and flatten to 1D
-    if isinstance(signal, torch.Tensor):
-        signal = signal.squeeze().numpy()
-    if isinstance(dry_signal, torch.Tensor):
-        dry_signal = dry_signal.squeeze().numpy()
-
-    # Make sure they're 1D
-    signal = signal.flatten()
-    dry_signal = dry_signal.flatten()
-
-    # Calculate PESQ
-    pesq_score = pesq(sample_rate, dry_signal, signal)
-
-    return pesq_score
-
-def evaluate_intelligibility(signal, dry_signal, sample_rate=16000):
-    """
-    Evaluates the MOS, STOI and PESQ metrics for the given signal against the dry signal.
-
-    Input:
-    signal: The signal to evaluate
-    dry_signal: The dry reference signal
-    sample_rate: The sample rate of the signals
-
-    Returns:
-    mos: The MOS score
-    stoi: The STOI score
-    pesq: The PESQ score
-    """
-    # Convert to numpy and flatten to 1D
-    if isinstance(signal, torch.Tensor):
-        signal = signal.squeeze().numpy()
-    if isinstance(dry_signal, torch.Tensor):
-        dry_signal = dry_signal.squeeze().numpy()
-
-    # Make sure they're 1D
-    signal = signal.flatten()
-    dry_signal = dry_signal.flatten()
-
-    # Calculate STOI and PESQ
-    stoi_score = stoi(dry_signal, signal, fs_sig=sample_rate)
-    pesq_score = pesq(sample_rate, dry_signal, signal)
-
-    subjective_model = SQUIM_SUBJECTIVE.get_model()
-    mos_score = subjective_model(signal, dry_signal)
-
-    return mos_score, stoi_score, pesq_score
-
-def evaluate_signals(Dry_sound, SAMPLE_BZ, SAMPLE_DZ, Original_BZ, Original_DZ):
-    """
-    Generates the estimated metrics (STOI, PESQ, MOS) for the original and filtered signals using the SQUIM model.
-
-    Input:
-    Dry_sound: Path to the dry sound file
-    SAMPLE_BZ: Path to the bright mic filtered sound file
-    SAMPLE_DZ: Path to the dark mic filtered sound file
-    Original_BZ: Path to the bright mic original sound file
-    Original_DZ: Path to the dark mic original sound file
-
-    Returns:
-    A dictionary containing the metrics for the original and filtered signals.
-    """
-    WAVEFORM_DRY, SAMPLE_RATE_DRY = torchaudio.load(Dry_sound)
-    WAVEFORM_BZ, SAMPLE_RATE_BZ = torchaudio.load(SAMPLE_BZ)
-    WAVEFORM_DZ, SAMPLE_RATE_DZ = torchaudio.load(SAMPLE_DZ)
-    WAVEFORM_BZ_ORIGINAL, SAMPLE_RATE_BZ_ORIGINAL = torchaudio.load(Original_BZ)
-    WAVEFORM_DZ_ORIGINAL, SAMPLE_RATE_DZ_ORIGINAL = torchaudio.load(Original_DZ)
-    # Convert to mono if needed
-    WAVEFORM_DRY = WAVEFORM_DRY[0:1, :]
-    WAVEFORM_DZ = WAVEFORM_DZ[0:1, :]
-    WAVEFORM_BZ = WAVEFORM_BZ[0:1, :]  
-    Original_DZ = WAVEFORM_DZ_ORIGINAL[0:1, :]  
-    Original_BZ = WAVEFORM_BZ_ORIGINAL[0:1, :]  
-
-    # Resample to 16kHz
-    if SAMPLE_RATE_DRY != 16000:
-        WAVEFORM_DRY = F.resample(WAVEFORM_DRY, SAMPLE_RATE_DRY, 16000)
-    if SAMPLE_RATE_BZ != 16000:
-        WAVEFORM_BZ = F.resample(WAVEFORM_BZ, SAMPLE_RATE_BZ, 16000)
-    if SAMPLE_RATE_DZ != 16000:
-        WAVEFORM_DZ = F.resample(WAVEFORM_DZ, SAMPLE_RATE_DZ, 16000)
-    if SAMPLE_RATE_BZ_ORIGINAL != 16000:
-        Original_BZ = F.resample(Original_BZ, SAMPLE_RATE_BZ_ORIGINAL, 16000)
-    if SAMPLE_RATE_DZ_ORIGINAL != 16000:
-        Original_DZ = F.resample(Original_DZ, SAMPLE_RATE_DZ_ORIGINAL, 16000)
-
-    # Trim to shortest length
-    min_len = min(WAVEFORM_DRY.shape[1], WAVEFORM_BZ.shape[1], WAVEFORM_DZ.shape[1], Original_BZ.shape[1], Original_DZ.shape[1])
-    WAVEFORM_DRY = WAVEFORM_DRY[:, :min_len]
-    WAVEFORM_BZ = WAVEFORM_BZ[:, :min_len]
-    WAVEFORM_DZ = WAVEFORM_DZ[:, :min_len]
-    Original_BZ = Original_BZ[:, :min_len]
-    Original_DZ = Original_DZ[:, :min_len]
-
-
-    # ML-predicted metrics (subjective-ish)
-    objective_model = SQUIM_OBJECTIVE.get_model()
-    subjective_model = SQUIM_SUBJECTIVE.get_model()
-
-    # Original DZ
-    squim_og_stoi_dz, squim_og_pesq_dz, squim_og_si_sdr_dz = objective_model(Original_DZ[0:1, :])
-    squim_og_dz_mos = subjective_model(Original_DZ, WAVEFORM_DRY)
-    og_stoi_dz, og_pesq_dz = evaluate_stoi_pesq(Original_DZ, WAVEFORM_DRY)
-
-    # Filtered DZ
-    squim_filtered_stoi_dz, squim_filtered_pesq_dz, squim_filtered_si_sdr_dz = objective_model(WAVEFORM_DZ[0:1, :])
-    squim_filtered_dz_mos = subjective_model(WAVEFORM_DZ, WAVEFORM_DRY)
-    filtered_stoi_dz, filtered_pesq_dz = evaluate_stoi_pesq(WAVEFORM_DZ, WAVEFORM_DRY)
-
-    # Original BZ
-    squim_og_stoi_bz, squim_og_pesq_bz, squim_og_si_sdr_bz = objective_model(Original_BZ[0:1, :])
-    squim_og_bz_mos = subjective_model(Original_BZ, WAVEFORM_DRY)
-    og_stoi_bz, og_pesq_bz = evaluate_stoi_pesq(Original_BZ, WAVEFORM_DRY)
-
+    if not filters_path.exists():
+        raise FileNotFoundError(f"Filters file not found at {filters_path}")
+    if not filters_path.suffix == '.npz':
+        raise ValueError(f"Expected a .npz file, but got {filters_path.suffix}")
     
-    # Filtered BZ
-    squim_filtered_stoi_bz, squim_filtered_pesq_bz, squim_filtered_si_sdr_bz = objective_model(WAVEFORM_BZ[0:1, :]) # TODO: Ensure this works
-    squim_filtered_bz_mos = subjective_model(WAVEFORM_BZ, WAVEFORM_DRY)
-    filtered_stoi_bz, filtered_pesq_bz = evaluate_stoi_pesq(WAVEFORM_BZ, WAVEFORM_DRY)
+    # Load the filters from the .npz file
+    filters_npz = np.load(filters_path, allow_pickle=True)
 
-    return {
-        "Original_BZ": {
-            "Squim_STOI": squim_og_stoi_bz,
-            "Squim_PESQ": squim_og_pesq_bz,
-            "STOI": og_stoi_bz,
-            "PESQ": og_pesq_bz,
-            "MOS": squim_og_bz_mos,
-        },
-        "Filtered_BZ": {
-            "Squim_STOI": squim_filtered_stoi_bz,
-            "Squim_PESQ": squim_filtered_pesq_bz,
-            "STOI": filtered_stoi_bz,
-            "PESQ": filtered_pesq_bz,
-            "MOS": squim_filtered_bz_mos,
-        },
-        "Original_DZ": {
-            "Squim_STOI": squim_og_stoi_dz,
-            "Squim_PESQ": squim_og_pesq_dz,
-            "STOI": og_stoi_dz,
-            "PESQ": og_pesq_dz,
-            "MOS": squim_og_dz_mos,
-        },
-        "Filtered_DZ": {
-            "Squim_STOI": squim_filtered_stoi_dz,
-            "Squim_PESQ": squim_filtered_pesq_dz,
-            "STOI": filtered_stoi_dz,
-            "PESQ": filtered_pesq_dz,
-            "MOS": squim_filtered_dz_mos,
-        },
-    }
+    # Extract all arrays from the npz file
+    filters = {}
+    for file_name in filters_npz.files:
+        filters[file_name] = filters_npz[file_name]
+        print(f"Extracted {file_name}, shape: {filters[file_name].shape if hasattr(filters[file_name], 'shape') else 'No shape'}")
+    
+    # Close the npz file after extraction
+    filters_npz.close()
+
+    return filters
 
 
-# Example usage
+def auralize_audio(dry_sound, impulse_responses):
+    """
+    Auralizes the dry sound using the provided impulse responses.
+    
+    Args:
+        dry_sound (Tensor): The dry sound audio signal.
+        impulse_responses (Tensor): Tensor with impulse response tensors from each speaker.
+    
+    Returns:
+        Tensor: Auralized audio signal.
+    """
+    # Ensure dry_sound is a 1D tensor
+    if dry_sound.ndim > 1:
+        dry_sound = dry_sound.mean(dim=0)
+
+    # Convolve the dry sound with each impulse response
+    auralized_signal = sum(
+        fftconvolve(dry_sound.numpy(), ir, mode='full')
+        for ir in impulse_responses
+    )
+
+    # Convert back to tensor and normalize
+    auralized_signal = torch.tensor(auralized_signal)
+    auralized_signal /= torch.max(torch.abs(auralized_signal))
+
+    return auralized_signal
+
+def apply_filters(dry_sound: torch.Tensor, filters: np.ndarray) -> torch.Tensor:
+    """
+    Apply a set of time-domain filters to a dry mono audio signal.
+
+    Args:
+        dry_sound (Tensor): 1D audio tensor (mono).
+        filters (ndarray): 2D array of shape [num_filters, filter_length].
+
+    Returns:
+        Tensor: Summed signal after filtering.
+    """
+    if dry_sound.ndim > 1:
+        dry_sound = dry_sound.mean(dim=0)
+
+    # Convolve dry signal with each filter
+    filtered_signals = [
+        fftconvolve(dry_sound, filt, mode='full')
+        for filt in filters
+    ]
+
+    # Sum all filtered signals
+    output = sum(filtered_signals)
+
+    # Normalize
+    output = output / np.max(np.abs(output))
+
+    return torch.tensor(output, dtype=torch.float32)
+
+
+
+def create_soundfiles(output_path, q_acc, q_vast, q_pm, dry_sound, bz_rir, dz_rir):
+    """
+    Create sound files for the different filters applied to the dry sound.
+    Args:
+        output_path (Path): Path to save the sound files.
+        q_acc (np.ndarray): Filters for acoustic contrast control.
+        q_vast (np.ndarray): Filters for vast.
+        q_pm (np.ndarray): Filters for pressure matching.
+        dry_sound (torch.Tensor): The dry sound audio signal.
+        bz_rir (list): List of impulse responses for the bright mic.
+        dz_rir (list): List of impulse responses for the dark mic.
+    """
+
+    # Auralize the dry sound using the provided impulse responses
+    original_bz = auralize_audio(dry_sound, bz_rir[0])
+    original_dz = auralize_audio(dry_sound, dz_rir[-1])
+
+    # Apply the filters to the auralized audio
+    filtered_acc_bz = apply_filters(original_bz.numpy(), q_acc)
+    filtered_acc_dz = apply_filters(original_dz.numpy(), q_acc)
+
+    filtered_vast_bz = apply_filters(original_bz.numpy(), q_vast)
+    filtered_vast_dz = apply_filters(original_dz.numpy(), q_vast)
+
+    filtered_pm_bz = apply_filters(original_bz.numpy(), q_pm)
+    filtered_pm_dz = apply_filters(original_dz.numpy(), q_pm)
+
+    # Save sounds with the dataset
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+    sf.write(output_path / "original_bz.wav", original_bz.numpy(), 44100)
+    sf.write(output_path / "original_dz.wav", original_dz.numpy(), 44100)
+    sf.write(output_path / "filtered_acc_bz.wav", filtered_acc_bz.numpy(), 44100)
+    sf.write(output_path / "filtered_acc_dz.wav", filtered_acc_dz.numpy(), 44100)
+    sf.write(output_path / "filtered_vast_bz.wav", filtered_vast_bz.numpy(), 44100)
+    sf.write(output_path / "filtered_vast_dz.wav", filtered_vast_dz.numpy(), 44100)
+    sf.write(output_path / "filtered_pm_bz.wav", filtered_pm_bz.numpy(), 44100)
+    sf.write(output_path / "filtered_pm_dz.wav", filtered_pm_dz.numpy(), 44100)
+
+
+def evaluate_position(position, dry_sound_path):
+    """Evaluate the intelligibility of the sound files at the test position.
+
+    Args:
+        position (Path): The path to the folder containing the sound files for the position
+        dry_sound_path (Path): The path to the dry sound file.
+    """
+    # Test the ACC filters
+    acc_results = evaluate_signals(dry_sound_path, 
+                                   position / "filtered_acc_bz.wav", 
+                                   position / "filtered_acc_dz.wav", 
+                                   position / "original_bz.wav", 
+                                   position / "original_dz.wav")
+    
+    vast_results = evaluate_signals(dry_sound_path,
+                                   position / "filtered_vast_bz.wav", 
+                                   position / "filtered_vast_dz.wav", 
+                                   position / "original_bz.wav", 
+                                   position / "original_dz.wav")
+    pm_results = evaluate_signals(dry_sound_path,
+                                   position / "filtered_pm_bz.wav", 
+                                   position / "filtered_pm_dz.wav", 
+                                   position / "original_bz.wav", 
+                                   position / "original_dz.wav")
+    
+    # Save the results in a text file
+    results_path = position / "evaluation_results.txt"
+    with open(results_path, 'w') as f:
+        f.write("Results for ACC Filters:\n")
+        for key, value in acc_results.items():
+            f.write(f"{key}: {value}\n")
+        
+        f.write("\nResults for VAST Filters:\n")
+        for key, value in vast_results.items():
+            f.write(f"{key}: {value}\n")
+        
+        f.write("\nResults for PM Filters:\n")
+        for key, value in pm_results.items():
+            f.write(f"{key}: {value}\n")
+    print(f"Evaluation results from {position.name} saved to {results_path}")
+
+
+def run_test_for_position(position_path: Path, dry_sound_path: Path, filters):
+    """
+    Run the evaluation for a specific position.
+    
+    Args:
+        position_path (Path): Path to the .npz file containing impulse responses for a position.
+        dry_sound_path (Path): Path to the dry sound file.
+    """
+
+    # Load the dry sound
+    dry_sound, sample_rate = torchaudio.load(dry_sound_path)
+    if dry_sound.shape[0] > 1:
+        dry_sound = dry_sound.mean(dim=0, keepdim=True)  # Convert to mono if stereo
+        dry_sound = dry_sound.squeeze(0)  # Remove channel dimension
+
+    # Load the RIRs from a position
+    rirs = np.load(f"{position_path}", allow_pickle=True)
+    dz_rir, bz_rir = rirs['dz_rir'], rirs['bz_rir']
+
+    # Path to the evaluation of the position
+    save_path = Path(f"{position_path.parent.parent}/evaluation/{position_path.parent.name}/{position_path.stem}")
+
+    # Create the sound files
+    create_soundfiles(save_path, filters['q_acc'], filters['q_vast'], filters['q_pm'], dry_sound, bz_rir, dz_rir)
+
+    # Evaluate the sound files
+    evaluate_position(save_path, dry_sound_path)
+
 if __name__ == "__main__":
-    # Load the audio files
-    Dry_sound = r"relaxing-guitar-loop-v5-245859.wav"  # Replace with the path to your dry sound file
-    SAMPLE_BZ = r"bright_mic_filtered.wav"  # Replace with the path to your bright mic filtered sound file
-    SAMPLE_DZ = r"dark_mic_filtered.wav"  # Replace with the path to your dark mic filtered sound file
-    Original_BZ = r"bright_mic_original.wav"  # Replace with the path to your bright mic original sound file
-    Original_DZ = r"dark_mic_original.wav"  # Replace with the path to your dark mic original sound file
+    # Paths to dataset split, filters, and dry sound
+    dataset_split_path = Path("/home/morten/GitHub/shoebox/run2/test")
+    filters_path = Path("/home/morten/GitHub/shoebox/combined_filters.npz")
+    dry_sound_path = Path("/home/morten/GitHub/szc_deep_learning_framework/concatenated_test_audio_44100.wav")
 
-    # Evaluate the signals
-    print(evaluate_signals(Dry_sound, SAMPLE_BZ, SAMPLE_DZ, Original_BZ, Original_DZ))
+    # Load the filters
+    filters = extract_combined_filters(filters_path)
+
+    # Test a room
+    for room in sorted(dataset_split_path.glob("room_*")):
+        print(f"Running tests for room: {room.name}")
+        for position in sorted(room.glob("*.npz")):
+            print(f"Running tests for position: {position.name}")
+            # Run the test for each position
+            run_test_for_position(position, dry_sound_path, filters)
+    
