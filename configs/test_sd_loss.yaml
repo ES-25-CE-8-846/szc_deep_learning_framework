@@ -35,6 +35,12 @@ testing_run: #use the model settings from training run but explicitly uses a new
     - "ac"
     - "sd"
     - "ae"
+    - "bz_mos"
+    - "dz_mos"
+    - "bz-pesq"
+    - "dz-pesq"
+    - "bz-stoi"
+    - "dz-stoi"
   baseline_filters:
     - "vast"
     - "acc"

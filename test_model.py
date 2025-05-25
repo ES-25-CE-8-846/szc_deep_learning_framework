@@ -12,6 +12,7 @@ from evaluation.model_interaction import ModelInteraction
 from evaluation.acoustic_contrast import acc_evaluation
 from evaluation.distortion import normalized_signal_distortion
 from evaluation.array_effort import array_effort
+from evaluation.intelligibility import evaluate_mos, evaluate_stoi, evaluate_pesq
 from tqdm import tqdm
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -56,6 +57,7 @@ def plot_filters(ax, filters, name, sample_rate=48000):
     ax.set_title(name)
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel("Magnitude")
+    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("exp_path")
@@ -219,6 +221,24 @@ if __name__ == "__main__":
                 elif metric == "ae":
                     result = torch.mean(10 * torch.log10((array_effort(torch.fft.rfft(f), bz_rirs))))
                     print(f"ae {result}")
+                elif metric == "bz_mos":
+                    result = evaluate_mos(bz_sound, testing_sound)
+                    print(f"bz_mos {result}")
+                elif metric == "dz_mos":
+                    result = evaluate_mos(dz_sound, testing_sound)
+                    print(f"dz_mos {result}")
+                elif metric == "bz_stoi":
+                    result = evaluate_stoi(bz_sound, testing_sound)
+                    print(f"bz_stoi {result}")
+                elif metric == "dz_stoi":
+                    result = evaluate_stoi(dz_sound, testing_sound)
+                    print(f"dz_stoi {result}")
+                elif metric == "bz_pesq":
+                    result = evaluate_pesq(bz_sound, testing_sound)
+                    print(f"bz_pesq {result}")
+                elif metric == "dz_pesq":
+                    result = evaluate_pesq(dz_sound, testing_sound)
+                    print(f"dz_pesq {result}")
 
                 filter_result_dict[filter_name][metric].append(result)
         if i > 100:
