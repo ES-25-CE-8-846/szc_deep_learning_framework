@@ -1,21 +1,21 @@
 
 training_run:
   model: "models.filter_estimator_v3_no_mlp_bias.AudioFilterEstimatorFreq"
-  loss_function: "training.loss_functions.acc_loss"
+  loss_function: "training.loss_functions.sd_acc_loss"
   loss_weights:
-    - 0.66
-    - 0.34
-  inner_loop_iterations: 1
-  epochs: 10
+    - 0.9
+    - 0.1
+  inner_loop_iterations: 8
+  epochs: 5
   learning_rate: 0.01
   batch_size: 128
   n_gpus: 2
   filter_length: 4096
-  sound_snip_length: 2000 #ms
+  sound_snip_length: 500 #ms
   limit_used_sound_snips: 10000
   sound_dataset_path: "/home/ai/datasets/audio/LibriSpeech/train-clean-100/"
   rir_dataset_path: "/home/ai/datasets/audio/dataset/shoebox/run2/train/"
-  savepath: "exp/test_acc_loss/l4"
+  savepath: "exp/test_input_length/8_its_m2"
   checkpointing_mode: "all" #all/last/none
   log_to_wandb: true
   wandb_key_path: "/home/ai/.wandb.key"
@@ -23,8 +23,9 @@ training_run:
 validation_run: #use the model settings from training_run but explicitly uses a new path for validation
   sound_dataset_path: "/home/ai/datasets/audio/LibriSpeech/train-clean-100/"
   rir_dataset_path: "/home/ai/datasets/audio/dataset/shoebox/run2/val/"
-  metrics: #these need to be implemente d
-    - "ac"
+  metrics: #these need to be implemented
+    - "acc"
+
 
 testing_run: #use the model settings from training run but explicitly uses a new path for the testing data
   enable: false
@@ -32,8 +33,6 @@ testing_run: #use the model settings from training run but explicitly uses a new
   rir_dataset_path: "/home/ai/datasets/audio/dataset/shoebox/run2/test/"
   metrics:
     - "ac"
-    - "sd"
-    - "ae"
   baseline_filters:
     - "vast"
     - "acc"

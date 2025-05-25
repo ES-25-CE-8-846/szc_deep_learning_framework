@@ -36,6 +36,7 @@ def train(rank, world_size, config):
     dataset = config["training_dataset"]
     validation_dataset = config["validation_dataset"]
 
+    learning_rate = training_config["learning_rate"]
     model = training_config["model"]
     filter_length = training_config["filter_length"]
     inner_loop_iterations = training_config["inner_loop_iterations"]
@@ -58,7 +59,7 @@ def train(rank, world_size, config):
             # Set the wandb entity where your project will be logged (generally your team name).
             entity="avs-846",
             # Set the wandb project where this run will be logged.
-            project="test-scz",
+            project="scz-v2-ablation",
             # Track hyperparameters and run metadata.
             config=config,
         )
@@ -84,6 +85,7 @@ def train(rank, world_size, config):
         loss_function=loss_function,
         loss_weights=loss_weights,
         model=model,
+        learning_rate = learning_rate,
         world_size=world_size,
         rank=rank,
         filter_length=filter_length,

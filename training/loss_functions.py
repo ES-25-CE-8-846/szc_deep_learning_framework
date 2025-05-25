@@ -91,18 +91,20 @@ def sound_loss(loss_data_dict, weights=None, device=None):
     return loss_dict
 
 
-def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
+def sann_loss(loss_data_dict, weights=None, device=None):
     """
     Loss function based on SANN-PSZ, including L1, L2, L3, and L4 terms.
     """
 
     bz_rirs_fft = torch.fft.rfft(loss_data_dict["data_dict"]["bz_rirs"])  # (B, S, M, F)
     dz_rirs_fft = torch.fft.rfft(loss_data_dict["data_dict"]["dz_rirs"])  # (B, S, M, F)
+    sr = loss_data_dict["data_dict"]["sr"][0].item()
 
     # bz_rirs_fft = bz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)
     # dz_rirs_fft = dz_rirs_fft.permute(0, 2, 1, 3)  # (B, M, S, F)de making the combe into a single sweep.[8] The garden, as it was originally laid out, influenced other designers and contributed to def
 
     complex_filters = loss_data_dict["filters_frq"].unsqueeze(2)  # (B, S, 1, F)
+    filters_time = loss_data_dict["filters_time"]
 
     # === L1: Matching desired pressure in BZ ===
     predicted_l1 = torch.sum(
@@ -118,14 +120,14 @@ def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
     l2 = torch.mean(torch.abs(predicted_l2) ** 2)
 
     # === L3: Limit gain amplitude ===
-    g_max = 1.0
+    g_max = 1.0/8
     gain_mag = torch.abs(complex_filters)  # (B, S, F)
     excess = torch.clamp(gain_mag - g_max, min=0.0)
     l3 = torch.mean(excess**2)
 
     # === L4: Enforce time-domain compactness ===
     # Create window and dummy bandpass filter
-    filter_len = 512  # Choose based on inverse FFT target size
+    filter_len = filters_time.size()[-1]  # Choose based on inverse FFT target size
     time_filters = torch.fft.irfft(
         loss_data_dict["filters_frq"], n=filter_len
     )  # (B, S, T)
@@ -134,25 +136,33 @@ def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
     w = 1.0 - torch.hann_window(filter_len, periodic=False).to(time_filters.device)
     w = w.view(1, 1, -1)
 
-    # Dummy bandpass filter - replace with real FIR filter
-    bandpass_filter = (
-        torch.ones(1, 1, 33, device=time_filters.device) / 33
-    )  # simple lowpass
+    # Filter specifications
+    lowcut = 250     # Low cutoff frequency (Hz)
+    highcut = 3500   # High cutoff frequency (Hz)
 
-    # Convolve time filters with bandpass
-    filt = F.conv1d(
-        time_filters.view(-1, 1, filter_len),  # (B*S, 1, T)
-        bandpass_filter,
-        padding="same",
-    ).view_as(
-        time_filters
-    )  # (B, S, T)
+    # Design the Butterworth bandpass filter
+    freqs = np.linspace(0, sr/2, int(filter_len/2 + 1)) #frequency bins for bandpass filter filter
+    H = np.zeros(freqs.shape)
+    H[(freqs >= lowcut) & (freqs <= highcut)] = 1.0  # Ideal rectangular bandpass
+    # Use a transition width (e.g., 200 Hz) and a cosine ramp
+    transition_width = 200
 
-    # Apply window
-    filt_weighted = filt * w
+    # Lower transition
+    start = np.logical_and(freqs >= (lowcut - transition_width), freqs < lowcut)
+    H[start] = 0.5 * (1 + np.cos(np.pi * (freqs[start] - lowcut) / transition_width))
+
+    # Upper transition
+    end = np.logical_and(freqs > highcut, freqs <= (highcut + transition_width))
+    H[end] = 0.5 * (1 + np.cos(np.pi * (freqs[end] - highcut) / transition_width))
+
+    bandpass_filter_frq = torch.tensor(H, device=complex_filters.device)
+
+    weighted_filter_frq = complex_filters * bandpass_filter_frq
+
+    weighted_filter = torch.fft.irfft(weighted_filter_frq) * w
 
     # Energy of weighted signal
-    l4 = torch.mean(filt_weighted**2)
+    l4 = torch.mean(weighted_filter**2)
 
     # === Combine Losses ===
     if weights is not None:
@@ -166,12 +176,12 @@ def sann_loss(loss_data_dict, weights=None, device=None, bins=239):
 
     loss_dict = {
         "loss": loss,
-        "filter_len": filter_len,
-        "bandpass_filter": bandpass_filter,
-        "l1": l1,
-        "l2": l2,
-        "l3": l3,
-        "l4": l4,
+        # "filter_len": filter_len,
+        # "bandpass_filter": H,
+        # "l1": l1,
+        # "l2": l2,
+        # "l3": l3,
+        # "l4": l4,
     }
 
     return loss_dict
@@ -243,7 +253,7 @@ def signal_distortion_loss(loss_data_dict, weights=None, device=None):
 
     B, M, S, L = bz_rirs.shape
 
-    # dry_sound = sd_reference
+    # dry_sound =   sd_reference
     # dry_sound = torch.ones((B, S, dry_sound.size()[-1])) * dry_sound
 
     dry_sound = dry_sound.to(bz_rirs.device)
@@ -251,6 +261,16 @@ def signal_distortion_loss(loss_data_dict, weights=None, device=None):
     bz_rirs = loss_data_dict["data_dict"]["bz_rirs"]  # (B, M, S, L)
     filters = loss_data_dict["filters_time"]  # (B, S, K)
     # bz_input = loss_data_dict["bz_input"]  # (B, M, T)
+
+    latency_filter = np.zeros(filters.detach().cpu().numpy().shape)
+
+    latency_filter_center_index = latency_filter.shape[-1] // 2
+
+    latency_filter[:,:, latency_filter_center_index] = 1
+    latency_filter = latency_filter[:,np.newaxis, :, :]
+
+    # Multiply dry_sound and RIRs (simulating dry signal through environment)
+    bz_rirs = torch.tensor(scipy.signal.fftconvolve(latency_filter, bz_rirs.detach().cpu().numpy(), axes = 3), device = dry_sound.device)
 
     batch_size, num_speakers, dry_len = dry_sound.shape
     _, num_mics, _, rir_len = bz_rirs.shape
@@ -288,9 +308,9 @@ def signal_distortion_loss(loss_data_dict, weights=None, device=None):
     actual = _normalize(actual[..., :dry_len])
 
     # L2 loss between desired and actual sound
-    signal_distortion = torch.mean((desired - actual) ** 2)  # /torch.mean(desired**2)
+    signal_distortion = torch.mean((desired - actual) ** 2)/torch.mean(desired**2)
 
-    return {"loss": signal_distortion}
+    return {"loss": 1/signal_distortion}
 
 
 def sd_acc_loss(loss_data_dict, weights=[10, 1], device=None):

@@ -33,7 +33,7 @@ def load_signal_distortion_test_sound():
         full_testing_sound.append(testing_sound)
 
     concatenated_sound = np.concatenate(full_testing_sound)
-    return concatenated_sound, sr
+    return concatenated_sound
 
 
 def plot_filters(ax, filters, name, sample_rate=48000):
@@ -92,14 +92,7 @@ if __name__ == "__main__":
     save_path = training_config["savepath"]
     sound_snip_len = training_config["sound_snip_length"]
 
-    ### load testing sound ###
-    testing_sound, sr = soundfile.read(
-        "./testing_data/relaxing-guitar-loop-v5-245859.wav"
-    )
-    testing_sound = testing_sound[:, 1]
-    # print(sd.query_devices())
-    # sd.play(testing_sound, sr, blocking=True)
-    print(testing_sound)
+
 
     ### load rirs ###
     # test_rirs_path = rir_dataset_path.replace("train", "test")
@@ -145,7 +138,7 @@ if __name__ == "__main__":
         inner_loop_iterations=inner_loop_iterations,
     )
 
-    testing_sound = testing_sound[np.newaxis, np.newaxis, :]
+    testing_sound = sd_test_sound[np.newaxis, np.newaxis, :]
     testing_sound_tensor = torch.tensor(testing_sound).to(torch.float)
 
     # create filter result dict
@@ -169,7 +162,7 @@ if __name__ == "__main__":
         precomp_filters = evaluation_data["data_dict"]["precomp_filters"]
 
         dirac_filters = torch.zeros_like(filters)
-        dirac_filters[:, :, 0] = 1
+        dirac_filters[:, :, int(dirac_filters.shape[-1]/2)] = 1
 
         filters_to_test = {}
 
@@ -198,19 +191,19 @@ if __name__ == "__main__":
             bz_rirs = data_dict["bz_rirs"]
             dz_rirs = data_dict["dz_rirs"]
 
-            bz_sound = model_interacter.auralizer(filtered_sound, bz_rirs)
-            dz_sound = model_interacter.auralizer(filtered_sound, dz_rirs)
+            # bz_sound = model_interacter.auralizer(filtered_sound, bz_rirs)
+            # dz_sound = model_interacter.auralizer(filtered_sound, dz_rirs)
 
-            sound_max_amp = torch.max(torch.abs(torch.cat((bz_sound, dz_sound), dim=1)))
+            # sound_max_amp = torch.max(torch.abs(torch.cat((bz_sound, dz_sound), dim=1)))
 
-            bz_sound = bz_sound / sound_max_amp
-            dz_sound = dz_sound / sound_max_amp
+            # bz_sound = bz_sound / sound_max_amp
+            # dz_sound = dz_sound / sound_max_amp
             filter_results = {}
             print(f"--{filter_name}--")
             for metric in testing_metrics:
                 if metric == "sd":
                     result = normalized_signal_distortion(
-                        testing_sound, f, bz_rirs, bz_sound
+                        testing_sound, f, bz_rirs
                     )
                     print(f"sd {result}")
                 elif metric == "ac":

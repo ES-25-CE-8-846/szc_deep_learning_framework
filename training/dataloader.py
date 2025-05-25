@@ -24,7 +24,8 @@ class DefaultDataset(Dataset):
                  filter_by_std = None,
                  filter_by_mean = None,
                  load_pre_computed_filters = False,
-                 filter_dirname = "filters_4096_1.0_1e-05"):
+                 filter_dirname = "filters_4096_1.0_1e-05",
+                 sound_samplerate=44100):
 
         self.sound_dataroot = sound_dataset_root
         self.rir_dataroot = rir_dataset_root
@@ -32,6 +33,7 @@ class DefaultDataset(Dataset):
         self.sound_snip_save_path = sound_snip_save_path
         self.limit_used_soundclips = limit_used_soundclips
         self.sound_snip_len = sound_snip_len
+        self.sound_samplerate = sound_samplerate
 
         self.bz_rirs_shape = None
         self.dz_rirs_shape = None
@@ -62,17 +64,49 @@ class DefaultDataset(Dataset):
                         warnings.warn(f"file type .{file_extension} is not yet supported", UserWarning)
             snip_counter = 0
             removed_snip_counter = 0
+
+            # for sound_file in tqdm(sorted(sound_flac_files)):
+                # data, sr = soundfile.read(sound_file)
+                #
+                # slen = int((sound_snip_len/1000) * sr)
+                # n_snips = len(data) // slen
+                # for snip in range(n_snips):
+                #     data_snip = data[snip*slen : (snip + 1) * slen]
+                #     data_sound_tensor = torch.tensor(data_snip)
+                #
+                #     if self.filter_snippets(filter_by_std=filter_by_std, filter_by_mean=filter_by_mean, sound_tensor=data_sound_tensor):
+                #         fn = f'{snip_counter}'.rjust(10,'0') + '.wav'
+                #         soundfile.write(file=os.path.join(sound_snip_save_path, fn), data=data_snip, samplerate=sr)
+                #         snip_counter += 1
+                #     else:
+                #         removed_snip_counter += 1
+                #
+                # if limit_used_soundclips and snip_counter > limit_used_soundclips:
+                #     break
+
             for sound_file in tqdm(sorted(sound_flac_files)):
                 data, sr = soundfile.read(sound_file)
 
-                slen = int((sound_snip_len/1000) * sr)
+                # Resample only if needed
+                if sr != self.sound_samplerate:
+                    data_tensor = torch.tensor(data, dtype=torch.float32)
+                    if data_tensor.ndim == 1:
+                        data_tensor = data_tensor.unsqueeze(0)  # [1, time]
+                    else:
+                        data_tensor = data_tensor.T  # [channels, time]
+
+                    data_tensor = torchaudio.functional.resample(data_tensor, orig_freq=sr, new_freq=self.sound_samplerate)
+                    data = data_tensor.squeeze().T.numpy()
+                    sr = self.sound_samplerate
+
+                slen = int((sound_snip_len / 1000) * sr)
                 n_snips = len(data) // slen
                 for snip in range(n_snips):
-                    data_snip = data[snip*slen : (snip + 1) * slen]
+                    data_snip = data[snip * slen : (snip + 1) * slen]
                     data_sound_tensor = torch.tensor(data_snip)
 
                     if self.filter_snippets(filter_by_std=filter_by_std, filter_by_mean=filter_by_mean, sound_tensor=data_sound_tensor):
-                        fn = f'{snip_counter}'.rjust(10,'0') + '.wav'
+                        fn = f'{snip_counter}'.rjust(10, '0') + '.wav'
                         soundfile.write(file=os.path.join(sound_snip_save_path, fn), data=data_snip, samplerate=sr)
                         snip_counter += 1
                     else:
