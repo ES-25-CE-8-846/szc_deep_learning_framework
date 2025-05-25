@@ -17,6 +17,19 @@ def get_class_or_func(path):
     return getattr(module, func_name)
 
 
+def load_signal_distortion_test_sound():
+    sound_file_dir = "./testing_data/signal_distortion_soundfiles/"
+    full_testing_sound = []
+    sound_files = sorted(os.listdir(sound_file_dir))
+    print("loading signal distortion test sound")
+    for sound_file in sound_files:
+        testing_sound, sr = soundfile.read(os.path.join(sound_file_dir, sound_file))
+        full_testing_sound.append(testing_sound)
+
+    concatenated_sound = np.concatenate(full_testing_sound)
+    return concatenated_sound
+
+
 class UserCommandDispatcher:
     def __init__(self, bz_sounds, dz_sounds, model_interactor, savepath):
         """Function to handle user command"""
@@ -163,6 +176,9 @@ if __name__ == "__main__":
         "./testing_data/relaxing-guitar-loop-v5-245859.wav"
     )
     testing_sound = testing_sound[:, 1]
+
+    testing_sound = load_signal_distortion_test_sound()
+
     sd.default.device = 0
     # print(sd.query_devices())
     # sd.play(testing_sound, sr, blocking=True)
@@ -175,6 +191,7 @@ if __name__ == "__main__":
         sound_dataset_root=sound_dataset_path,
         rir_dataset_root=rir_dataset_path,
         sound_snip_len=sound_snip_len,
+        sound_snip_save_path="/tmp/sound_snips/test",
         limit_used_soundclips=100,
         override_existing=True,  # Add this if needed
     )
@@ -189,7 +206,7 @@ if __name__ == "__main__":
         output_shape=(3, filter_length),  # Adjust based on number of sources/mics
     )
 
-    model_state_dict_fn = os.listdir(os.path.join(save_path, "checkpoints"))[
+    model_state_dict_fn = sorted(os.listdir(os.path.join(save_path, "checkpoints")))[
         -1
     ]  # make this user selectebel later
     print(model_state_dict_fn)

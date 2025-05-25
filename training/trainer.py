@@ -13,10 +13,14 @@ import torchinfo
 import os
 import glob
 
+import scipy.special
+
 from evaluation.acoustic_contrast import acc_evaluation
 import scipy
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+
+
 class Trainer:
     def __init__(
         self,
@@ -25,20 +29,22 @@ class Trainer:
         loss_function,
         rank,
         world_size,
-        loss_weights = None,
-        validation_dataloader = None,
+        loss_weights=None,
+        learning_rate=0.001,
+        validation_dataloader=None,
         optimizer=torch.optim.AdamW,
         filter_length=2048,
         inner_loop_iterations=16,
-        checkpointing_mode = "none",
-        save_path = "",
-        log_to_wandb = False,
+        checkpointing_mode="none",
+        save_path="",
+        log_to_wandb=False,
         enable_debug_plotting=False,
     ) -> None:
         self.model = model
         self.dataloader = dataloader
         self.validation_dataloader = validation_dataloader
         self.loss_function = loss_function
+
         self.loss_weights = loss_weights
         self.filter_length = filter_length
         self.device = rank
@@ -53,18 +59,17 @@ class Trainer:
         self.model = self.model.to(rank)
         self.ddp_model = DDP(self.model, device_ids=[device])
 
-        self.optimizer = optimizer(self.model.parameters(), lr=0.001)
+        self.optimizer = optimizer(self.model.parameters(), lr=learning_rate)
 
         self.current_ep = 1
 
-        if self.checkpointing_mode != 'none':
-            self.checkpoint_path = os.path.join(self.save_path, 'checkpoints')
+        if self.checkpointing_mode != "none":
+            self.checkpoint_path = os.path.join(self.save_path, "checkpoints")
             try:
                 os.makedirs(self.checkpoint_path)
             except Exception as e:
                 os.makedirs(self.checkpoint_path, exist_ok=True)
                 print(e)
-
 
     def auralizer(self, sound, impulse_responses):
         """
@@ -90,7 +95,7 @@ class Trainer:
         mic_output = torch.zeros((B, M, output_len), device=sound.device)
 
         sound = sound.detach().cpu()
-        sound = sound[:,None,:,:]
+        sound = sound[:, None, :, :]
         impulse_responses = impulse_responses.detach().cpu()
 
         mic_output = scipy.signal.fftconvolve(sound, impulse_responses, axes=3)
@@ -98,7 +103,6 @@ class Trainer:
         mic_output = np.sum(mic_output, axis=2)
 
         return torch.from_numpy(mic_output)
-
 
     def apply_filter(self, sound, filters):
         """
@@ -127,13 +131,12 @@ class Trainer:
         sound = sound.to(filters.device)
 
         sound = sound.detach().cpu()
-        sound = sound[:,:,:]
+        sound = sound[:, :, :]
         filters = filters.detach().cpu()
 
         output = scipy.signal.fftconvolve(sound, filters, axes=2)
 
         return torch.from_numpy(output)
-
 
     def format_to_model_input(self, output_sound, mic_inputs):
         """
@@ -186,7 +189,7 @@ class Trainer:
         n_speakers = bz_rirs.size()[2]
         batch_size = bz_rirs.size()[0]
         old_filters = torch.zeros((batch_size, n_speakers, self.filter_length))
-        old_filters[...,0] = 1
+        old_filters[..., 0] = 1
         for iteration in range(n_iterations):
             filtered_sound = self.apply_filter(sound, old_filters)
             bz_microphone_input = self.auralizer(sound, bz_rirs)
@@ -202,8 +205,6 @@ class Trainer:
                 filters_frq = model_output
                 filters_time = torch.fft.irfft(model_output)
 
-
-
             filtered_sound = self.apply_filter(sound, filters_time)
             bz_microphone_input = self.auralizer(filtered_sound, bz_rirs)
             dz_microphone_input = self.auralizer(filtered_sound, dz_rirs)
@@ -214,24 +215,42 @@ class Trainer:
                 "bz_input": bz_microphone_input,
                 "dz_input": dz_microphone_input,
                 "filters_time": filters_time,
-                "filters_frq":filters_frq,
+                "filters_frq": filters_frq,
                 "data_dict": data_dict,
             }
 
-            loss_dict = self.loss_function(data_for_loss_dict, weights = self.loss_weights, device=self.device)
+            loss_dict = self.loss_function(
+                data_for_loss_dict, weights=self.loss_weights, device=self.device
+            )
             loss = loss_dict["loss"]
 
             if self.enable_debug_plotting:
                 self.debug_plotting(data_dict, data_for_loss_dict, loss_dict)
 
-
             loss.backward()
             abs_mean_gradients = {}
             for name, param in self.model.named_parameters():
                 if param.grad is not None:
-                    abs_mean_gradients[name] = torch.mean(torch.abs(param.grad)).item()
+                    # Get parent module using name
+                    module_name = name.rsplit(".", 1)[
+                        0
+                    ]  # Handles 'layer.weight', 'block.bn1.bias', etc.
+                    module = dict(self.model.named_modules()).get(module_name, None)
 
-            gradient_dict = self.compute_normalized_gradient_dict(abs_mean_gradients)
+                    # Skip if it's a BatchNorm layer
+                    if isinstance(
+                        module,
+                        (
+                            torch.nn.BatchNorm1d,
+                            torch.nn.BatchNorm2d,
+                            torch.nn.BatchNorm3d,
+                        ),
+                    ):
+                        pass
+                    else:
+                        abs_mean_gradients[name] = torch.mean(torch.abs(param.grad)).item()
+
+            gradient_dict = self.compute_gradient_normed_dict(abs_mean_gradients)
 
             self.optimizer.step()
             self.optimizer.zero_grad()
@@ -239,12 +258,17 @@ class Trainer:
             old_filters = filters_time.detach()
 
             # compute acoustic contrast for logging
-            acc = acc_evaluation(filters_time.detach().cpu(), bz_rirs.cpu(), dz_rirs.cpu())
-            loss_dict['acc'] = acc
+            acc = acc_evaluation(
+                filters_time.detach().cpu(), bz_rirs.cpu(), dz_rirs.cpu()
+            )
+            loss_dict["acc"] = acc
             if self.rank == 0:
-                print(f"loss: {loss.item()}, ac {acc}, inner loop iteration: {iteration}")
+                print(
+                    f"loss: {loss.item()}, ac {acc}, inner loop iteration: {iteration}"
+                )
                 self.print_gradient_dict(gradient_dict)
             if self.log_to_wandb:
+                loss_dict["gradients"] = gradient_dict
                 self.wandb_logger(loss_dict, "training")
 
         return loss_dict
@@ -267,13 +291,15 @@ class Trainer:
         n_speakers = bz_rirs.size()[2]
         batch_size = bz_rirs.size()[0]
         old_filters = torch.zeros((batch_size, n_speakers, self.filter_length))
-        old_filters[...,0] = 1
+        old_filters[..., 0] = 1
         with torch.no_grad():
             for iteration in range(n_iterations):
                 filtered_sound = self.apply_filter(sound, old_filters)
                 bz_microphone_input = self.auralizer(sound, bz_rirs)
 
-                nn_input = self.format_to_model_input(filtered_sound, bz_microphone_input)
+                nn_input = self.format_to_model_input(
+                    filtered_sound, bz_microphone_input
+                )
 
                 model_output = self.ddp_model.forward(nn_input)
 
@@ -283,8 +309,6 @@ class Trainer:
                 elif self.model.output_filter_domain == "frequency":
                     filters_frq = model_output
                     filters_time = torch.fft.irfft(model_output)
-
-
 
                 filtered_sound = self.apply_filter(sound, filters_time)
                 bz_microphone_input = self.auralizer(filtered_sound, bz_rirs)
@@ -296,11 +320,13 @@ class Trainer:
                     "bz_input": bz_microphone_input,
                     "dz_input": dz_microphone_input,
                     "filters_time": filters_time,
-                    "filters_frq":filters_frq,
+                    "filters_frq": filters_frq,
                     "data_dict": data_dict,
                 }
 
-                loss_dict = self.loss_function(data_for_loss_dict, weights = self.loss_weights, device=self.device)
+                loss_dict = self.loss_function(
+                    data_for_loss_dict, weights=self.loss_weights, device=self.device
+                )
                 loss = loss_dict["loss"]
 
                 if self.enable_debug_plotting:
@@ -309,22 +335,26 @@ class Trainer:
                 if self.rank == 0:
                     print(f"loss: {loss.item()}, inner loop iteration: {iteration}")
 
-
                 old_filters = filters_time.detach()
 
                 # compute acoustic contrast for logging
-                acc = acc_evaluation(filters_time.detach().cpu(), bz_rirs.cpu(), dz_rirs.cpu())
-                loss_dict['acc'] = acc
+                acc = acc_evaluation(
+                    filters_time.detach().cpu(), bz_rirs.cpu(), dz_rirs.cpu()
+                )
+                loss_dict["acc"] = acc
 
         return loss_dict
+
     def save_checkpoint(self, current_ep, last_loss):
         """Function to save the model weights based on the checkpointing_mode and current model weights"""
 
-        if self.checkpointing_mode != 'none':
+        if self.checkpointing_mode != "none":
             if self.checkpointing_mode == "all":
                 fn = f"chkp_ep{str(current_ep).rjust(3,'0')}_loss{str(last_loss).replace('.','_')}.pth"
                 print(f"saving checkpoint {fn}")
-                torch.save(self.model.state_dict(), os.path.join(self.checkpoint_path, fn))
+                torch.save(
+                    self.model.state_dict(), os.path.join(self.checkpoint_path, fn)
+                )
 
             elif self.checkpointing_mode == "last":
 
@@ -335,21 +365,69 @@ class Trainer:
                     os.remove(file)
 
                 print(f"saving checkpoint {fn}")
-                torch.save(self.model.state_dict(), os.path.join(self.checkpoint_path, fn))
+                torch.save(
+                    self.model.state_dict(), os.path.join(self.checkpoint_path, fn)
+                )
 
     def wandb_logger(self, loss_dict, namespace):
-        wandb.log(data={f"{namespace}_loss":loss_dict['loss'].item(),
-                        f"{namespace}_acc":loss_dict['acc']})
+        if namespace == "validation":
+            wandb.log(
+                data={
+                    f"{namespace}_loss": loss_dict["loss"].item(),
+                    f"{namespace}_ac": loss_dict["acc"],
+                }
+            )
+        elif namespace == "training":
+            wandb.log(
+                data={
+                    f"{namespace}_loss": loss_dict["loss"].item(),
+                    f"{namespace}_ac": loss_dict["acc"],
+                    f"{namespace}_grd": loss_dict["gradients"],
+                }
+            )
 
-    def compute_normalized_gradient_dict(self, gradient_dict:dict):
+    def compute_normalized_gradient_dict(self, gradient_dict: dict):
         max_gradient = max(gradient_dict.values())
 
         normalized_gradient_dict = {}
 
         for key, value in zip(gradient_dict.keys(), gradient_dict.values()):
-            normalized_gradient_dict[key] = value/max_gradient
+            normalized_gradient_dict[key] = value / max_gradient
 
         return normalized_gradient_dict
+
+    def compute_gradient_normed_dict(self, gradient_dict: dict):
+        collector = np.zeros(4)
+        counter = np.zeros(4)
+        for key, value in zip(gradient_dict.keys(), gradient_dict.values()):
+            if "encoder" in key and "weight" in key:
+                collector[0] += value
+                counter[0] += 1
+            elif "encoder" in key and "bias" in key:
+                collector[1] += value
+                counter[1] += 1
+            elif "mlp" in key and "weight" in key:
+                collector[2] += value
+                counter[2] += 1
+            elif "mlp" in key and "bias" in key:
+                collector[3] += value
+                counter[3] += 1
+
+        print(f"collector sum: {np.sum(collector)}")
+        print(f"collector: {collector}")
+
+        norm_valus = collector/counter
+
+        norm_dict = {"encoder_weights":norm_valus[0],
+                        "encoder_biases":norm_valus[1],
+                        "mlp_weights":norm_valus[2],
+                        "mlp_biases":norm_valus[3],
+                        }
+
+        return norm_dict
+
+
+
 
     def print_gradient_dict(self, gradient_dict):
         for key, value in zip(gradient_dict.keys(), gradient_dict.values()):
@@ -374,7 +452,6 @@ class Trainer:
         bz_input_sound = data_for_loss_dict["bz_input"][:, :, 0:dry_sound_len]
         dz_input_sound = data_for_loss_dict["dz_input"][:, :, 0:dry_sound_len]
 
-
         # compute the desired frequency responses
         des_bz_h = torch.fft.rfft(dry_sound * hann_window)
         des_dz_h = torch.fft.rfft(torch.zeros_like(dry_sound))
@@ -382,7 +459,6 @@ class Trainer:
         # compute the measured frequency responses
         bz_h = torch.fft.rfft(bz_input_sound * hann_window)
         dz_h = torch.fft.rfft(dz_input_sound * hann_window)
-
 
         fft_bz = bz_h
         fft_dz = dz_h
@@ -420,13 +496,14 @@ class Trainer:
                 for key in data_dict.keys():
                     data_dict[key] = data_dict[key].to(self.device)
 
-            loss_dict = self.run_inner_feedback_training(data_dict, self.inner_loop_iterations)
+            loss_dict = self.run_inner_feedback_training(
+                data_dict, self.inner_loop_iterations
+            )
 
             if self.rank == 0:
                 percent_done = (i + 1) / total_batches * 100
                 print(f"epoch {self.current_ep}: {percent_done:.2f}% complete")
                 print(f"time taken {time()-time_begin}")
-
 
         # validation step
         if self.rank == 0:
@@ -436,7 +513,7 @@ class Trainer:
 
         if self.validation_dataloader is not None:
             self.ddp_model.eval()
-            summed_loss_dict = {'loss':0.0, 'acc':0.0}
+            summed_loss_dict = {"loss": 0.0, "acc": 0.0}
             n_losses = 0
             for i, data_dict in enumerate(self.validation_dataloader):
                 # Ensure all data is passed to the correct device
@@ -444,9 +521,10 @@ class Trainer:
                     for key in data_dict.keys():
                         data_dict[key] = data_dict[key].to(self.device)
 
-
                 with torch.no_grad():
-                    loss_dict = self.run_inner_feedback_validation(data_dict, self.inner_loop_iterations)
+                    loss_dict = self.run_inner_feedback_validation(
+                        data_dict, self.inner_loop_iterations
+                    )
                     for key in loss_dict.keys():
                         summed_loss_dict[key] += loss_dict[key]
                         n_losses += 1
@@ -466,8 +544,8 @@ class Trainer:
             if self.log_to_wandb:
                 self.wandb_logger(loss_dict, "validation")
 
-
-
         if self.rank == 0:
-            self.save_checkpoint(current_ep=self.current_ep, last_loss=loss_dict['loss'].item())
+            self.save_checkpoint(
+                current_ep=self.current_ep, last_loss=loss_dict["loss"].item()
+            )
             self.current_ep += 1
