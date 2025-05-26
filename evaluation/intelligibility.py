@@ -2,15 +2,16 @@ import torch
 from pathlib import Path
 import torchaudio
 import matplotlib.pyplot as plt
-# from pesq import pesq
-# from pystoi import stoi
+from pesq import pesq
+from pystoi import stoi
 from torchaudio.pipelines import SQUIM_OBJECTIVE, SQUIM_SUBJECTIVE
 import torchaudio.functional as F
 import numpy as np
 from scipy.signal import fftconvolve
 import soundfile as sf
+from tqdm import tqdm
 
-from intelligibility_tools import evaluate_signals
+from intelligibility_tools import evaluate_stoi_pesq, evaluate_mos
 
 
 def extract_combined_filters(filters_path: Path):
@@ -140,45 +141,58 @@ def create_soundfiles(output_path, q_acc, q_vast, q_pm, dry_sound, bz_rir, dz_ri
     sf.write(output_path / "filtered_pm_dz.wav", filtered_pm_dz.numpy(), 44100)
 
 
-def evaluate_position(position, dry_sound_path):
+def evaluate_position_from_variable(position_path: Path, dry_sound, original_bz, original_dz, filtered_acc_bz, filtered_acc_dz, filtered_vast_bz, filtered_vast_dz, filtered_pm_bz, filtered_pm_dz, filters):
     """Evaluate the intelligibility of the sound files at the test position.
-
-    Args:
-        position (Path): The path to the folder containing the sound files for the position
-        dry_sound_path (Path): The path to the dry sound file.
     """
-    # Test the ACC filters
-    acc_results = evaluate_signals(dry_sound_path, 
-                                   position / "filtered_acc_bz.wav", 
-                                   position / "filtered_acc_dz.wav", 
-                                   position / "original_bz.wav", 
-                                   position / "original_dz.wav")
+
+    # Calculate metrics for the original signals
+    og_stoi_bz, og_pesq_bz = evaluate_stoi_pesq(original_bz, dry_sound, sample_rate=44100)
+    og_stoi_dz, og_pesq_dz = evaluate_stoi_pesq(original_dz, dry_sound, sample_rate=44100)
+    squim_og_bz_mos = evaluate_mos(original_bz, dry_sound)
+    squim_og_dz_mos = evaluate_mos(original_dz, dry_sound)
+
+    # Calculate metrics for the filtered signals
+    acc_filtered_stoi_bz, acc_filtered_pesq_bz = evaluate_stoi_pesq(filtered_acc_bz, dry_sound, sample_rate=44100)
+    acc_filtered_stoi_dz, acc_filtered_pesq_dz = evaluate_stoi_pesq(filtered_acc_dz, dry_sound, sample_rate=44100)
+    acc_squim_filtered_bz_mos = evaluate_mos(filtered_acc_bz, dry_sound)
+    acc_squim_filtered_dz_mos = evaluate_mos(filtered_acc_dz, dry_sound)
     
-    vast_results = evaluate_signals(dry_sound_path,
-                                   position / "filtered_vast_bz.wav", 
-                                   position / "filtered_vast_dz.wav", 
-                                   position / "original_bz.wav", 
-                                   position / "original_dz.wav")
-    pm_results = evaluate_signals(dry_sound_path,
-                                   position / "filtered_pm_bz.wav", 
-                                   position / "filtered_pm_dz.wav", 
-                                   position / "original_bz.wav", 
-                                   position / "original_dz.wav")
-    
+    # Calculate metrics for the filtered signals
+    vast_filtered_stoi_bz, vast_filtered_pesq_bz = evaluate_stoi_pesq(filtered_vast_bz, dry_sound, sample_rate=44100)
+    vast_filtered_stoi_dz, vast_filtered_pesq_dz = evaluate_stoi_pesq(filtered_vast_dz, dry_sound, sample_rate=44100)
+    vast_squim_filtered_bz_mos = evaluate_mos(filtered_vast_bz, dry_sound)
+    vast_squim_filtered_dz_mos = evaluate_mos(filtered_vast_dz, dry_sound)
+
+    # Calculate metrics for the filtered signals
+    pm_filtered_stoi_bz, pm_filtered_pesq_bz = evaluate_stoi_pesq(filtered_pm_bz, dry_sound, sample_rate=44100)
+    pm_filtered_stoi_dz, pm_filtered_pesq_dz = evaluate_stoi_pesq(filtered_pm_dz, dry_sound, sample_rate=44100)
+    pm_squim_filtered_bz_mos = evaluate_mos(filtered_pm_bz, dry_sound)
+    pm_squim_filtered_dz_mos = evaluate_mos(filtered_pm_dz, dry_sound)
+
     # Save the results in a text file
-    results_path = position / "evaluation_results.txt"
+    position_path = Path(position_path)
+    position_path.mkdir(parents=True, exist_ok=True)
+
+    results_path = position_path / "evaluation_results.txt"
+
     with open(results_path, 'w') as f:
-        f.write("Results for ACC Filters:\n")
-        for key, value in acc_results.items():
-            f.write(f"{key}: {value}\n")
-        
+        f.write(f"Evaluation results for position: {position_path.name}\n")
+        f.write(f"Original signal:\n")
+        f.write(f"Original BZ - STOI: {og_stoi_bz}, PESQ: {og_pesq_bz}, MOS: {squim_og_bz_mos}\n")
+        f.write(f"Original DZ - STOI: {og_stoi_dz}, PESQ: {og_pesq_dz}, MOS: {squim_og_dz_mos}\n")
+
+        f.write("\nResults for ACC Filters:\n")
+        f.write(f"Filtered BZ - STOI: {acc_filtered_stoi_bz}, PESQ: {acc_filtered_pesq_bz}, MOS: {acc_squim_filtered_bz_mos}\n")
+        f.write(f"Filtered DZ - STOI: {acc_filtered_stoi_dz}, PESQ: {acc_filtered_pesq_dz}, MOS: {acc_squim_filtered_dz_mos}\n")
+
         f.write("\nResults for VAST Filters:\n")
-        for key, value in vast_results.items():
-            f.write(f"{key}: {value}\n")
-        
+        f.write(f"Filtered BZ - STOI: {vast_filtered_stoi_bz}, PESQ: {vast_filtered_pesq_bz}, MOS: {vast_squim_filtered_bz_mos}\n")
+        f.write(f"Filtered DZ - STOI: {vast_filtered_stoi_dz}, PESQ: {vast_filtered_pesq_dz}, MOS: {vast_squim_filtered_dz_mos}\n")
+
         f.write("\nResults for PM Filters:\n")
-        for key, value in pm_results.items():
-            f.write(f"{key}: {value}\n")
+        f.write(f"Filtered BZ - STOI: {pm_filtered_stoi_bz}, PESQ: {pm_filtered_pesq_bz}, MOS: {pm_squim_filtered_bz_mos}\n")
+        f.write(f"Filtered DZ - STOI: {pm_filtered_stoi_dz}, PESQ: {pm_filtered_pesq_dz}, MOS: {pm_squim_filtered_dz_mos}\n")
+
     print(f"Evaluation results from {position.name} saved to {results_path}")
 
 
@@ -201,29 +215,53 @@ def run_test_for_position(position_path: Path, dry_sound_path: Path, filters):
     rirs = np.load(f"{position_path}", allow_pickle=True)
     dz_rir, bz_rir = rirs['dz_rir'], rirs['bz_rir']
 
+
+    # Create auralized audio for the dry sound using the RIRs
+    original_bz = auralize_audio(dry_sound, bz_rir[0])
+    original_dz = auralize_audio(dry_sound, dz_rir[-1])
+
+    # Apply the filters to the auralized audio
+    filtered_acc_bz = apply_filters(original_bz.numpy(), filters['q_acc'])
+    filtered_acc_dz = apply_filters(original_dz.numpy(), filters['q_acc'])
+
+    filtered_vast_bz = apply_filters(original_bz.numpy(), filters['q_vast'])
+    filtered_vast_dz = apply_filters(original_dz.numpy(), filters['q_vast'])
+
+    filtered_pm_bz = apply_filters(original_bz.numpy(), filters['q_pm'])
+    filtered_pm_dz = apply_filters(original_dz.numpy(), filters['q_pm'])
+
     # Path to the evaluation of the position
     save_path = Path(f"{position_path.parent.parent}/evaluation/{position_path.parent.name}/{position_path.stem}")
 
+
+    evaluate_position_from_variable(save_path, dry_sound, original_bz, original_dz, filtered_acc_bz, filtered_acc_dz, filtered_vast_bz, filtered_vast_dz, filtered_pm_bz, filtered_pm_dz, filters)
+
+    # Path to the evaluation of the position
+    #save_path = Path(f"{position_path.parent.parent}/evaluation/{position_path.parent.name}/{position_path.stem}")
+
     # Create the sound files
-    create_soundfiles(save_path, filters['q_acc'], filters['q_vast'], filters['q_pm'], dry_sound, bz_rir, dz_rir)
+    #create_soundfiles(save_path, filters['q_acc'], filters['q_vast'], filters['q_pm'], dry_sound, bz_rir, dz_rir)
 
     # Evaluate the sound files
-    evaluate_position(save_path, dry_sound_path)
+    #evaluate_position(save_path, dry_sound_path)
 
 if __name__ == "__main__":
     # Paths to dataset split, filters, and dry sound
-    dataset_split_path = Path("/home/morten/GitHub/shoebox/run2/test")
-    filters_path = Path("/home/morten/GitHub/shoebox/combined_filters.npz")
-    dry_sound_path = Path("/home/morten/GitHub/szc_deep_learning_framework/concatenated_test_audio_44100.wav")
+    dataset_split_path = Path("/home/ubuntu/shoebox/run2/test")
+    filters_path = Path("/home/ubuntu/combined_filters.npz")
+    dry_sound_path = Path("/home/ubuntu/concatenated_test_audio_44100.wav")
 
     # Load the filters
     filters = extract_combined_filters(filters_path)
 
     # Test a room
-    for room in sorted(dataset_split_path.glob("room_*")):
+    for room in tqdm(sorted(dataset_split_path.glob("room_*"))):
         print(f"Running tests for room: {room.name}")
-        for position in sorted(room.glob("*.npz")):
-            print(f"Running tests for position: {position.name}")
+        position = room / "0000.npz"
+        run_test_for_position(position, dry_sound_path, filters)
+
+        # for position in tqdm(sorted(room.glob("*.npz"))):
+        #     print(f"  - Position: {position.name}")
             # Run the test for each position
-            run_test_for_position(position, dry_sound_path, filters)
+            
     
