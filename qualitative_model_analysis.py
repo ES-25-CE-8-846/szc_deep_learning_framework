@@ -173,7 +173,7 @@ if __name__ == "__main__":
 
     ### load testing sound ###
     testing_sound, sr = soundfile.read(
-        "./testing_data/relaxing-guitar-loop-v5-245859.wav"
+        "./testing_data/longer_speech_samples/only_for_testing/wav/concatenated_test_audio_44100.wav"
     )
     testing_sound = testing_sound[:, 1]
 
