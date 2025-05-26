@@ -10,6 +10,23 @@ import wandb
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.distributed import init_process_group, destroy_process_group
+import soundfile
+import numpy as np
+
+def load_test_sound():
+    sound_file_dir = "./testing_data/longer_speech_samples/resampled/"
+    full_testing_sound = []
+    sound_files = sorted(os.listdir(sound_file_dir))
+    print("loading signal distortion test sound")
+    for sound_file in sound_files:
+        testing_sound, sr = soundfile.read(os.path.join(sound_file_dir, sound_file))
+        full_testing_sound.append(testing_sound)
+
+    concatenated_sound = np.concatenate(full_testing_sound)
+    stacked_sound = np.stack([concatenated_sound, concatenated_sound, concatenated_sound]) # stack to speaker dimensions
+    stacked_sound = stacked_sound[np.newaxis, ...] #add speaker dimension
+
+    return stacked_sound
 
 
 def get_class_or_func(path):
@@ -28,9 +45,10 @@ def ddp_setup(rank: int, world_size: int):
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
 
-def train(rank, world_size, config):
+def train(rank, world_size, config, validation_test_sound):
     ddp_setup(rank, world_size)
     training_config = config["training_run"]
+    validation_config = config["validation_run"]
     loss_function = get_class_or_func(training_config["loss_function"])
 
     dataset = config["training_dataset"]
@@ -47,6 +65,9 @@ def train(rank, world_size, config):
     batch_size = training_config["batch_size"]
     wandb_key_path = training_config["wandb_key_path"]
 
+    validation_metrics = validation_config["metrics"]
+
+
 
     loss_weights = training_config['loss_weights']
 
@@ -59,7 +80,7 @@ def train(rank, world_size, config):
             # Set the wandb entity where your project will be logged (generally your team name).
             entity="avs-846",
             # Set the wandb project where this run will be logged.
-            project="scz-v2-ablation",
+            project="scz-test-loss-weights",
             # Track hyperparameters and run metadata.
             config=config,
         )
@@ -82,6 +103,8 @@ def train(rank, world_size, config):
     training_loop = trainer.Trainer(
         dataloader=torch_dataloader,
         validation_dataloader=validation_dataloader,
+        validation_metrics=validation_metrics,
+        validation_test_sound=validation_test_sound,
         loss_function=loss_function,
         loss_weights=loss_weights,
         model=model,
@@ -108,6 +131,8 @@ if __name__ == "__main__":
     parser.add_argument("config_path")
     args = parser.parse_args()
 
+    validation_test_sound = load_test_sound()
+    print(f"loaded validation test sound with shape {validation_test_sound.shape}")
     # Load config
     with open(args.config_path, "r") as f:
         config = yaml.safe_load(f)
@@ -179,4 +204,4 @@ if __name__ == "__main__":
     training_config["model"] = model
 
     world_size = n_gpus
-    mp.spawn(train, args=(world_size, config), nprocs=world_size, join=True)
+    mp.spawn(train, args=(world_size, config, validation_test_sound), nprocs=world_size, join=True)
