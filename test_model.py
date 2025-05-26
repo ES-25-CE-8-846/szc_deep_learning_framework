@@ -1,5 +1,6 @@
 import argparse
 import os
+from scipy._lib.array_api_compat import device
 import yaml
 import importlib
 import soundfile
@@ -16,12 +17,30 @@ from evaluation.intelligibility import evaluate_mos, evaluate_stoi, evaluate_pes
 from tqdm import tqdm
 import pandas as pd
 import matplotlib.pyplot as plt
+import scipy.signal
+
 
 
 def get_class_or_func(path):
     module_name, func_name = path.rsplit(".", 1)
     module = importlib.import_module(module_name)
     return getattr(module, func_name)
+
+def load_test_sound():
+    sound_file_dir = "./testing_data/longer_speech_samples/only_for_testing/wav/"
+    full_testing_sound = []
+    sound_files = sorted(os.listdir(sound_file_dir))
+    print("loading signal distortion test sound")
+    for sound_file in sound_files:
+        testing_sound, sr = soundfile.read(os.path.join(sound_file_dir, sound_file))
+        full_testing_sound.append(testing_sound)
+
+    concatenated_sound = np.concatenate(full_testing_sound)
+    stacked_sound = np.stack([concatenated_sound, concatenated_sound, concatenated_sound]) # stack to speaker dimensions
+    stacked_sound = stacked_sound[np.newaxis, ...] #add speaker dimension
+
+    return stacked_sound
+
 
 
 def load_signal_distortion_test_sound():
@@ -57,7 +76,7 @@ def plot_filters(ax, filters, name, sample_rate=48000):
     ax.set_title(name)
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel("Magnitude")
-    
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("exp_path")
@@ -118,8 +137,8 @@ if __name__ == "__main__":
         output_shape=(3, filter_length),  # Adjust based on number of sources/mics
     )
 
-    model_state_dict_fn = os.listdir(os.path.join(save_path, "checkpoints"))[
-        0
+    model_state_dict_fn = sorted(os.listdir(os.path.join(save_path, "checkpoints")))[
+        -1
     ]  # make this user selectebel later
     state_dict_path = os.path.join(save_path, "checkpoints", model_state_dict_fn)
 
@@ -140,8 +159,7 @@ if __name__ == "__main__":
         inner_loop_iterations=inner_loop_iterations,
     )
 
-    testing_sound = sd_test_sound[np.newaxis, np.newaxis, :]
-    testing_sound_tensor = torch.tensor(testing_sound).to(torch.float)
+    testing_sound = load_test_sound()[:,:,:,0]
 
     # create filter result dict
     filter_result_dict = {}
@@ -151,6 +169,11 @@ if __name__ == "__main__":
         for metric in testing_metrics:
             filter_result_dict[filter_name][metric] = []
     n_tests = 0
+
+
+    # load avg filters
+
+    avg_filters = dict(np.load("/home/ai/Downloads/combined_filters.npz"))
 
     fig, ax = plt.subplots(6, 1)
     for i, data_dict in tqdm(enumerate(torch_dataloader)):
@@ -170,7 +193,8 @@ if __name__ == "__main__":
 
         filters_to_test["model"] = filters
 
-        plot_filters(ax[0], filters, "model")
+        # plot_filters(ax[0], filters, "model")
+
 
         for n, filter_name in enumerate(baseline_filters):
             if filter_name == "dirac":
@@ -181,31 +205,59 @@ if __name__ == "__main__":
                 filters_to_test[filter_name] = precomp_filters["q_acc"]
             elif filter_name == "pm":
                 filters_to_test[filter_name] = precomp_filters["q_pm"]
+            elif filter_name == "avg_vast":
+                filters_to_test[filter_name] = avg_filters["q_vast"]
+            elif filter_name == "avg_acc":
+                filters_to_test[filter_name] = avg_filters["q_acc"]
+            elif filter_name == "avg_pm":
+                filters_to_test[filter_name] = avg_filters["q_pm"]
 
 
-
-            plot_filters(ax[n+1], filters_to_test[filter_name], filter_name)
+            # plot_filters(ax[n+1], filters_to_test[filter_name], filter_name)
 
         for filter_name, f in zip(filters_to_test.keys(), filters_to_test.values()):
-
-            filtered_sound = model_interacter.apply_filter(testing_sound_tensor, f)
 
             bz_rirs = data_dict["bz_rirs"]
             dz_rirs = data_dict["dz_rirs"]
 
-            # bz_sound = model_interacter.auralizer(filtered_sound, bz_rirs)
-            # dz_sound = model_interacter.auralizer(filtered_sound, dz_rirs)
+            if len(f.shape) != 3:
+                f = f[np.newaxis,...]
 
-            # sound_max_amp = torch.max(torch.abs(torch.cat((bz_sound, dz_sound), dim=1)))
+            print(f"testing_sound shape {testing_sound.shape}")
 
-            # bz_sound = bz_sound / sound_max_amp
-            # dz_sound = dz_sound / sound_max_amp
-            filter_results = {}
+
+            filtered_test_sound = scipy.signal.oaconvolve(testing_sound, f, axes=2)
+
+            filtered_test_sound = filtered_test_sound[:, np.newaxis, ...] # adding microphone dim
+
+            auralized_test_sound_bz = np.sum(scipy.signal.oaconvolve(filtered_test_sound, bz_rirs.detach().cpu(), axes=3), axis=2) # [B, M, K]
+            auralized_test_sound_dz = np.sum(scipy.signal.oaconvolve(filtered_test_sound, dz_rirs.detach().cpu(), axes=3), axis=2) # [B, M, K]
+
+
+            print(f"auralized_test_sound_bz shape {auralized_test_sound_bz.shape}")
+
+            number_of_samples = round(testing_sound.shape[-1] * float(16000) / 44100)
+
+
+            ear_sound:np.ndarray = scipy.signal.resample(auralized_test_sound_bz[0,0,:testing_sound.shape[-1]], number_of_samples, axis=-1 ) #[K]
+
+            dz_sound:np.ndarray = scipy.signal.resample(auralized_test_sound_dz[-1,-1,:testing_sound.shape[-1]], number_of_samples, axis=-1 ) #[K]
+            dry_sound:np.ndarray = scipy.signal.resample(testing_sound[0,0,:], number_of_samples, axis=-1) #[K]
+
+            # sound_max_amp = np.max(np.abs(np.concatenate((ear_sound, dz_sound))))
+            #
+            # noise_floor = np.random.rand(ear_sound.shape[-1]) * 0.001
+            #
+            # ear_sound = ear_sound / sound_max_amp + noise_floor
+            # dz_sound = dz_sound / sound_max_amp + noise_floor
+            # filter_results = {}
+
+
             print(f"--{filter_name}--")
             for metric in testing_metrics:
                 if metric == "sd":
                     result = normalized_signal_distortion(
-                        testing_sound, f, bz_rirs
+                        dry_sound, f, bz_rirs
                     )
                     print(f"sd {result}")
                 elif metric == "ac":
@@ -215,32 +267,40 @@ if __name__ == "__main__":
                     result = torch.mean(10 * torch.log10((array_effort(torch.fft.rfft(f), bz_rirs))))
                     print(f"ae {result}")
                 elif metric == "bz_mos":
-                    result = evaluate_mos(bz_sound, testing_sound)
+                    result = evaluate_mos(ear_sound[np.newaxis,...], dry_sound[np.newaxis,...], device="cuda:1")
                     print(f"bz_mos {result}")
                 elif metric == "dz_mos":
-                    result = evaluate_mos(dz_sound, testing_sound)
+                    result = evaluate_mos(dz_sound[np.newaxis,...], dry_sound[np.newaxis,...], device="cuda:1")
                     print(f"dz_mos {result}")
                 elif metric == "bz_stoi":
-                    result = evaluate_stoi(bz_sound, testing_sound)
+                    result = evaluate_stoi(ear_sound, dry_sound)
                     print(f"bz_stoi {result}")
                 elif metric == "dz_stoi":
-                    result = evaluate_stoi(dz_sound, testing_sound)
+                    result = evaluate_stoi(dz_sound, dry_sound)
                     print(f"dz_stoi {result}")
                 elif metric == "bz_pesq":
-                    result = evaluate_pesq(bz_sound, testing_sound)
+                    result = evaluate_pesq(ear_sound, dry_sound)
                     print(f"bz_pesq {result}")
                 elif metric == "dz_pesq":
-                    result = evaluate_pesq(dz_sound, testing_sound)
+                    result = evaluate_pesq(dz_sound, dry_sound)
                     print(f"dz_pesq {result}")
+                else:
+                    print(f"{metric} not found")
+                    break
 
                 filter_result_dict[filter_name][metric].append(result)
         if i > 100:
-            plt.show()
             break
 
     for filter_name in filters_to_test.keys():
+
         for metric in testing_metrics:
+
+            print(f"{filter_name}, {metric}")
+            print(filter_result_dict[filter_name][metric])
+
             filter_result_dict[filter_name][metric] = np.mean(
+
                 filter_result_dict[filter_name][metric]
             )
 
