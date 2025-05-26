@@ -37,7 +37,7 @@ def evaluate_stoi_pesq(signal, dry_signal, sample_rate=16000):
 
     return stoi_score, pesq_score
 
-def evaluate_mos(signal, dry_signal):
+def evaluate_mos(signal, dry_signal, device=None):
     """
     Evaluates the MOS score for the given signal against the dry signal.
 
@@ -54,14 +54,22 @@ def evaluate_mos(signal, dry_signal):
     if isinstance(dry_signal, torch.Tensor):
         dry_signal = dry_signal.squeeze().numpy()
 
-    # Make sure they're 1D
-    signal = signal.flatten()
-    dry_signal = dry_signal.flatten()
+    # Make sure they're [1, k]D
+    if device is not None:
+        print(f"evaluating mos on {device}")
+        signal = torch.tensor(signal[0:1,:]).float().to(device)
+        dry_signal = torch.tensor(dry_signal[0:1, :]).float().to(device)
 
-    subjective_model = SQUIM_SUBJECTIVE.get_model()
-    mos_score = subjective_model(signal, dry_signal)
+        subjective_model = SQUIM_SUBJECTIVE.get_model().to(device)
+        mos_score = subjective_model(signal, dry_signal)
+    else:
 
-    return mos_score
+        signal = torch.tensor(signal[0:1,:]).float()
+        dry_signal = torch.tensor(dry_signal[0:1, :]).float()
+
+        subjective_model = SQUIM_SUBJECTIVE.get_model()
+        mos_score = subjective_model(signal, dry_signal)
+    return mos_score[0].item()
 
 def evaluate_stoi(signal, dry_signal, sample_rate=16000):
     """
@@ -172,9 +180,9 @@ def evaluate_signals(Dry_sound, SAMPLE_BZ, SAMPLE_DZ, Original_BZ, Original_DZ):
     # Convert to mono if needed
     WAVEFORM_DRY = WAVEFORM_DRY[0:1, :]
     WAVEFORM_DZ = WAVEFORM_DZ[0:1, :]
-    WAVEFORM_BZ = WAVEFORM_BZ[0:1, :]  
-    Original_DZ = WAVEFORM_DZ_ORIGINAL[0:1, :]  
-    Original_BZ = WAVEFORM_BZ_ORIGINAL[0:1, :]  
+    WAVEFORM_BZ = WAVEFORM_BZ[0:1, :]
+    Original_DZ = WAVEFORM_DZ_ORIGINAL[0:1, :]
+    Original_BZ = WAVEFORM_BZ_ORIGINAL[0:1, :]
 
     # Resample to 16kHz
     if SAMPLE_RATE_DRY != 16000:
@@ -216,7 +224,7 @@ def evaluate_signals(Dry_sound, SAMPLE_BZ, SAMPLE_DZ, Original_BZ, Original_DZ):
     squim_og_bz_mos = subjective_model(Original_BZ, WAVEFORM_DRY)
     og_stoi_bz, og_pesq_bz = evaluate_stoi_pesq(Original_BZ, WAVEFORM_DRY)
 
-    
+
     # Filtered BZ
     squim_filtered_stoi_bz, squim_filtered_pesq_bz, squim_filtered_si_sdr_bz = objective_model(WAVEFORM_BZ[0:1, :]) # TODO: Ensure this works
     squim_filtered_bz_mos = subjective_model(WAVEFORM_BZ, WAVEFORM_DRY)

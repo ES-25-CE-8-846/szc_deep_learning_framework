@@ -13,9 +13,11 @@ import torchinfo
 import os
 import glob
 
-import scipy.special
+import scipy.signal
 
 from evaluation.acoustic_contrast import acc_evaluation
+import evaluation.intelligibility
+
 import scipy
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
@@ -39,6 +41,8 @@ class Trainer:
         save_path="",
         log_to_wandb=False,
         enable_debug_plotting=False,
+        validation_metrics=['ac'],
+        validation_test_sound = None,
     ) -> None:
         self.model = model
         self.dataloader = dataloader
@@ -54,6 +58,9 @@ class Trainer:
         self.save_path = save_path
         self.enable_debug_plotting = enable_debug_plotting and rank == 0
         self.log_to_wandb = log_to_wandb and rank == 0
+
+        self.validation_metrics = validation_metrics
+        self.validation_test_sound = validation_test_sound
 
         torch.cuda.set_device(rank)
         self.model = self.model.to(rank)
@@ -196,6 +203,8 @@ class Trainer:
 
             nn_input = self.format_to_model_input(filtered_sound, bz_microphone_input)
 
+            # print(f"nn input shape {nn_input.shape}")
+
             model_output = self.ddp_model.forward(nn_input)
 
             if self.model.output_filter_domain == "time":
@@ -275,7 +284,7 @@ class Trainer:
 
         # take optimizer step
 
-    def run_inner_feedback_validation(self, data_dict, n_iterations):
+    def run_inner_feedback_validation(self, data_dict, n_iterations, evaluations_dict:dict):
         """
         Function to run the inner feedback training loop
 
@@ -338,11 +347,46 @@ class Trainer:
                 old_filters = filters_time.detach()
 
                 # compute acoustic contrast for logging
-                acc = acc_evaluation(
-                    filters_time.detach().cpu(), bz_rirs.cpu(), dz_rirs.cpu()
-                )
-                loss_dict["acc"] = acc
 
+
+
+
+                if len(evaluations_dict["ac"]) < 30  :
+                    print(f"validation test sound shape {self.validation_test_sound.shape}")
+
+                    filtered_test_sound = scipy.signal.oaconvolve(self.validation_test_sound, old_filters.detach().cpu(), axes=2)
+
+                    filtered_test_sound = filtered_test_sound[:, np.newaxis, ...] # adding microphone dim
+
+                    auralized_test_sound_bz = np.sum(scipy.signal.oaconvolve(filtered_test_sound, bz_rirs.detach().cpu(), axes=3), axis=2) # [B, M, K]
+
+                    print(f"auralized_test_sound_bz shape {auralized_test_sound_bz.shape}")
+
+                    number_of_samples = round(self.validation_test_sound.shape[-1] * float(16000) / 44100)
+
+
+                    ear_sound = scipy.signal.resample(auralized_test_sound_bz[0,0,:self.validation_test_sound.shape[-1]], number_of_samples, axis=-1 ) #[K]
+                    dry_sound = scipy.signal.resample(self.validation_test_sound[0,0,:], number_of_samples, axis=-1) #[K]
+
+                    for metric in self.validation_metrics:
+                        if metric == 'ac':
+                            result = acc_evaluation(
+                                filters_time.detach().cpu(), bz_rirs.cpu(), dz_rirs.cpu()
+                            )
+                            loss_dict["acc"] = result
+                        elif metric == 'stoi':
+                            result = evaluation.intelligibility.evaluate_stoi(signal=ear_sound, dry_signal=dry_sound, sample_rate=16000)
+
+                        elif metric == 'pesq':
+                            result = evaluation.intelligibility.evaluate_pesq(signal=ear_sound, dry_signal=dry_sound, sample_rate=16000)
+
+                        elif metric == 'mos':
+                            result = evaluation.intelligibility.evaluate_mos(signal=ear_sound[np.newaxis, ...], dry_signal=dry_sound[np.newaxis, ...], device=self.ddp_model.device)
+                        evaluations_dict[metric].append(result)
+
+                    print(evaluations_dict)
+
+            loss_dict["evaluations"] = evaluations_dict
         return loss_dict
 
     def save_checkpoint(self, current_ep, last_loss):
@@ -374,7 +418,8 @@ class Trainer:
             wandb.log(
                 data={
                     f"{namespace}_loss": loss_dict["loss"].item(),
-                    f"{namespace}_ac": loss_dict["acc"],
+                    f"{namespace}_ac": loss_dict["evaluations"]['ac'],
+                    f"{namespace}_evals" : loss_dict["evaluations"],
                 }
             )
         elif namespace == "training":
@@ -413,8 +458,8 @@ class Trainer:
                 collector[3] += value
                 counter[3] += 1
 
-        print(f"collector sum: {np.sum(collector)}")
-        print(f"collector: {collector}")
+        # print(f"collector sum: {np.sum(collector)}")
+        # print(f"collector: {collector}")
 
         norm_valus = collector/counter
 
@@ -511,9 +556,15 @@ class Trainer:
 
         total_val_batches = len(self.validation_dataloader)
 
+        evaluations_dict = {}
+
+        for metric in self.validation_metrics:
+            evaluations_dict[metric] = []
+
         if self.validation_dataloader is not None:
             self.ddp_model.eval()
             summed_loss_dict = {"loss": 0.0, "acc": 0.0}
+            losses = []
             n_losses = 0
             for i, data_dict in enumerate(self.validation_dataloader):
                 # Ensure all data is passed to the correct device
@@ -523,20 +574,20 @@ class Trainer:
 
                 with torch.no_grad():
                     loss_dict = self.run_inner_feedback_validation(
-                        data_dict, self.inner_loop_iterations
+                        data_dict, self.inner_loop_iterations, evaluations_dict
                     )
-                    for key in loss_dict.keys():
-                        summed_loss_dict[key] += loss_dict[key]
-                        n_losses += 1
+                    losses.append(loss_dict['loss'].detach().item())
 
                 if self.rank == 0:
                     percent_done = (i + 1) / total_val_batches * 100
                     print(f"epoch {self.current_ep}: {percent_done:.2f}% complete")
 
                 # this is more of a temporary logging, the evaluation metrics sohuld be logged as well
+            loss_dict['loss'] = np.mean(losses)
 
-            for key in loss_dict.keys():
-                loss_dict[key] = summed_loss_dict[key] / n_losses
+            for key in loss_dict["evaluations"].keys():
+                loss_dict["evaluations"][key] = np.mean(loss_dict["evaluations"][key])
+
 
             if self.rank == 0:
                 print(f"mean loss: {loss_dict}")
