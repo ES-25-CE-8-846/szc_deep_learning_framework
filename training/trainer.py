@@ -171,6 +171,7 @@ class Trainer:
             mic_inputs = mic_inputs.to(self.device)
             output_sound = output_sound.to(self.device)
 
+
         stacked_tensor = torch.stack([output_sound, mic_inputs], dim=1)
         if self.device is not None:
             stacked_tensor = stacked_tensor.to(self.device)
@@ -178,7 +179,13 @@ class Trainer:
         assert stacked_tensor.size()[0] == output_sound.size()[0]
         assert stacked_tensor.size()[1] == 2
 
+        #normalize input to be between 1 and -1
+        max_amp = torch.max(torch.abs(stacked_tensor))
+        stacked_tensor = stacked_tensor / max_amp
+
         return stacked_tensor.transpose(2, 3)
+
+
 
     def run_inner_feedback_training(self, data_dict, n_iterations):
         """
