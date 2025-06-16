@@ -230,6 +230,8 @@ if __name__ == "__main__":
 
             filtered_test_sound = filtered_test_sound[:, np.newaxis, ...] # adding microphone dim
 
+            delayed_dry_sound = scipy.signal.oaconvolve(testing_sound, filters_to_test["dirac"])
+
             auralized_test_sound_bz = np.sum(scipy.signal.oaconvolve(filtered_test_sound, bz_rirs.detach().cpu(), axes=3), axis=2) # [B, M, K]
             auralized_test_sound_dz = np.sum(scipy.signal.oaconvolve(filtered_test_sound, dz_rirs.detach().cpu(), axes=3), axis=2) # [B, M, K]
 
@@ -242,7 +244,7 @@ if __name__ == "__main__":
             ear_sound:np.ndarray = scipy.signal.resample(auralized_test_sound_bz[0,0,:testing_sound.shape[-1]], number_of_samples, axis=-1 ) #[K]
 
             dz_sound:np.ndarray = scipy.signal.resample(auralized_test_sound_dz[-1,-1,:testing_sound.shape[-1]], number_of_samples, axis=-1 ) #[K]
-            dry_sound:np.ndarray = scipy.signal.resample(testing_sound[0,0,:], number_of_samples, axis=-1) #[K]
+            dry_sound:np.ndarray = scipy.signal.resample(delayed_dry_sound[0,0,:testing_sound.shape[-1]], number_of_samples, axis=-1) #[K]
 
             # sound_max_amp = np.max(np.abs(np.concatenate((ear_sound, dz_sound))))
             #

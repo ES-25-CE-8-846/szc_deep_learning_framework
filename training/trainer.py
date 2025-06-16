@@ -147,7 +147,7 @@ class Trainer:
 
     def format_to_model_input(self, output_sound, mic_inputs):
         """
-        Function to ensure correct network input
+        Function to ensure correct network input shape and range
         Args:
             output_sound(tensor): the output sound of each speaker
             mic_inputs(tensor): the input of each of the microphones available during inference
