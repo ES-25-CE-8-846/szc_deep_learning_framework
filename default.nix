@@ -43,10 +43,44 @@
       ];
       doCheck = false;
     };
+  pesq = let
+    pname = "pesq";
+    version = "0.0.4";
+  in
+    pythonPackages.buildPythonPackage {
+      inherit pname version;
+      src = pkgs.fetchurl {
+        url = "https://github.com/ludlows/python-pesq/archive/master.zip";
+        sha256 = "sha256-brCuQmRhS8X7gSpMVSkb+9HxAy3hbtmYJjgmb+gmXsI=";
+      };
+      propagatedBuildInputs = with pythonPackages; [
+        cffi
+        numpy
+        cython
+      ];
+      doCheck = false;
+    };
+  pystoi = let
+    pname = "pystoi";
+    version = "0.4.1";
+  in
+    pythonPackages.buildPythonPackage {
+      inherit pname version;
+      src = pkgs.fetchurl {
+        url = "https://files.pythonhosted.org/packages/bf/3d/1ae8bdb686c6aaaeef474aa6b790abbe38f42b61188b57a974dd9320e521/pystoi-0.4.1.tar.gz";
+        sha256 = "sha256-HG9Q1vv+5GsAySJFjNvScijZgwyoHOp4j9YA/C995uQ=";
+      };
+      propagatedBuildInputs = with pythonPackages; [
+        cffi
+        numpy
+        cython
+      ];
+      doCheck = false;
+    };
 in
   pkgs.mkShell {
     buildInputs = with pythonPackages;
-      [pyroomacoustics pyflac]
+      [pyroomacoustics pyflac pesq pystoi]
       ++ (with pkgs; [
         python311
       ])

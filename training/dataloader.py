@@ -25,6 +25,7 @@ class DefaultDataset(Dataset):
                  filter_by_mean = None,
                  load_pre_computed_filters = False,
                  filter_dirname = "filters_4096_1.0_1e-05",
+                 return_filter_save_path = False,
                  sound_samplerate=44100):
 
         self.sound_dataroot = sound_dataset_root
@@ -44,6 +45,8 @@ class DefaultDataset(Dataset):
 
         self.load_pre_computed_filters = load_pre_computed_filters
         self.filter_dirname = filter_dirname
+
+        self.return_filter_save_path = return_filter_save_path
 
         if override_existing:
             shutil.rmtree(sound_snip_save_path)
@@ -229,7 +232,11 @@ class DefaultDataset(Dataset):
         else:
             data_dict = {'sound':sound, 'bz_rirs':bz_rirs, 'dz_rirs':dz_rirs, 'sr':sr}
 
+
         if self.load_pre_computed_filters:
             data_dict['precomp_filters'] = filters
+
+        if self.return_filter_save_path:
+            data_dict['filter_save_path'] = filter_path
 
         return data_dict

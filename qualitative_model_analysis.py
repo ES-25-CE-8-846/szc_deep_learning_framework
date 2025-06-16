@@ -31,12 +31,12 @@ def load_signal_distortion_test_sound():
 
 
 class UserCommandDispatcher:
-    def __init__(self, bz_sounds, dz_sounds, model_interactor, savepath):
+    def __init__(self, sound_dict, model_interactor, savepath):
         """Function to handle user command"""
         self.should_continue = True
         self.sound = np.zeros(10)
-        self.bz_sounds = bz_sounds
-        self.dz_sounds = dz_sounds
+        self.sound_dict = sound_dict
+        self.current_filter = "model"
         self.model = model_interactor.model
         self.savepath = savepath
         self.posible_checkpoints = os.listdir(os.path.join(savepath, "checkpoints"))
@@ -44,6 +44,7 @@ class UserCommandDispatcher:
             "p": self.play_sound,
             "save": self.save_sound,
             "sds": self.sound_device_selector,
+            "fs": self.select_filter,
             "ss": self.sound_selector,
             "svs": self.save_sound,
             "nr": self.next_room,
@@ -61,11 +62,25 @@ class UserCommandDispatcher:
         """Function to go to the next room"""
         self.should_continue = False
 
+    def select_filter(self):
+        """Function to select the filter"""
+        filter_names = []
+
+        print("select a filter")
+        for i, key in enumerate(self.sound_dict.keys()):
+            filter_names.append(key)
+            print(f"{i}: {key}")
+
+        selected_index = int(input("select: "))
+        self.current_filter = filter_names[selected_index]
+
     def sound_selector(self):
         """Function to have the user select the sound to play"""
         i = 0
         n_bz = 0
         n_dz = 0
+        self.bz_sounds = self.sound_dict[self.current_filter][0]
+        self.dz_sounds = self.sound_dict[self.current_filter][1]
 
         for sound in self.bz_sounds[0, :, :]:
             print(f"bz_{i}")
@@ -163,7 +178,7 @@ if __name__ == "__main__":
     sound_dataset_path = training_config["sound_dataset_path"]
     sound_dataset_path = "/home/a/datasets/audio/LibriSpeech"
     rir_dataset_path = testing_config["rir_dataset_path"]
-    rir_dataset_path = "/home/a/datasets/audio/rirs/dataset/shoebox/run2/test/"
+    rir_dataset_path = "/home/a/datasets/audio/testing_rirs/dataset/shoebox/run2/test"
     batch_size = training_config["batch_size"]
     batch_size = 1
     filter_length = training_config["filter_length"]
@@ -173,11 +188,11 @@ if __name__ == "__main__":
 
     ### load testing sound ###
     testing_sound, sr = soundfile.read(
-        "./testing_data/relaxing-guitar-loop-v5-245859.wav"
+        "./testing_data/longer_speech_samples/only_for_testing/wav/concatenated_test_audio_44100.wav"
     )
     testing_sound = testing_sound[:, 1]
 
-    testing_sound = load_signal_distortion_test_sound()
+    # testing_sound = load_signal_distortion_test_sound()
 
     sd.default.device = 0
     # print(sd.query_devices())
@@ -194,6 +209,7 @@ if __name__ == "__main__":
         sound_snip_save_path="/tmp/sound_snips/test",
         limit_used_soundclips=100,
         override_existing=True,  # Add this if needed
+        load_pre_computed_filters=True,
     )
 
     torch_dataloader = torch.utils.data.DataLoader(
@@ -238,22 +254,33 @@ if __name__ == "__main__":
 
         filters = evaluation_data["filters_time"]
 
-        filtered_sound = model_interacter.apply_filter(testing_sound_tensor, filters)
+        pre_comp_filters = dict(evaluation_data["data_dict"]["precomp_filters"])
 
-        bz_rirs = data_dict["bz_rirs"]
-        dz_rirs = data_dict["dz_rirs"]
+        pre_comp_filters["model"] = filters
 
-        bz_sound = model_interacter.auralizer(filtered_sound, bz_rirs)
-        dz_sound = model_interacter.auralizer(filtered_sound, dz_rirs)
+        sound_dict = {}
 
-        sound_max_amp = torch.max(torch.abs(torch.cat((bz_sound, dz_sound), dim=1)))
+        for filter_name, f in pre_comp_filters.items():
+            filtered_sound = model_interacter.apply_filter(testing_sound_tensor, f)
 
-        bz_sound = bz_sound / sound_max_amp
-        dz_sound = dz_sound / sound_max_amp
+            bz_rirs = data_dict["bz_rirs"]
+            dz_rirs = data_dict["dz_rirs"]
+
+            bz_sound = model_interacter.auralizer(filtered_sound, bz_rirs)
+            dz_sound = model_interacter.auralizer(filtered_sound, dz_rirs)
+
+            sound_max_amp = torch.max(torch.abs(torch.cat((bz_sound, dz_sound), dim=1)))
+
+            noise_floor = np.random.rand(bz_sound.shape[-1]) * 0.001
+
+            bz_sound = bz_sound / sound_max_amp + noise_floor
+            dz_sound = dz_sound / sound_max_amp + noise_floor
+
+            sound_dict[filter_name] = [bz_sound, dz_sound]
 
         print(f"room {i}")
         user_command_dispatcher = UserCommandDispatcher(
-            bz_sound, dz_sound, model_interacter, savepath=save_path
+            sound_dict, model_interacter, savepath=save_path
         )
         user_command_dispatcher.user_interactor()
         print(bz_sound.size())

@@ -141,6 +141,7 @@ class ModelInteraction:
         bz_rirs = data_dict["bz_rirs"]
         dz_rirs = data_dict["dz_rirs"]
 
+
         n_speakers = bz_rirs.size()[2]
         batch_size = bz_rirs.size()[0]
         old_filters = torch.zeros((batch_size, n_speakers, self.filter_length))
@@ -151,6 +152,8 @@ class ModelInteraction:
                 bz_microphone_input = self.auralizer(sound, bz_rirs)
 
                 nn_input = self.format_to_model_input(filtered_sound, bz_microphone_input)
+
+                print(f"nn input shape {nn_input.size()}")
 
                 model_output = self.model.forward(nn_input)
 
